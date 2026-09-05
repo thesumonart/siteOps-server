@@ -93,6 +93,19 @@ export default tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/unbound-method': 'off',
       'no-console': 'off',
+
+      /*
+       * An HTTP response body is untyped by nature — supertest types it `any`
+       * because only the test knows what the route returns. Casting every
+       * assertion through an interface would bury what is being asserted under
+       * type ceremony, and the assertion *is* the check that the shape is
+       * right. Production code keeps every one of these rules on.
+       */
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
     },
   },
   {

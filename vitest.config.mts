@@ -31,6 +31,15 @@ export default defineConfig({
         'mongodb://localhost:27017/siteops_test?replicaSet=rs0&directConnection=true',
       AUTH_SECRET: 'test-only-secret-value-not-used-for-anything-real',
       LOG_LEVEL: 'silent',
+      /*
+       * Every request in the integration suite arrives from the same loopback
+       * address and therefore shares one rate-limit budget, which the real
+       * limits are far too tight for. Raised here rather than weakened in the
+       * schema, and rate limiting itself is covered directly in
+       * `tests/integration/rate-limit.test.ts` with a rule of its own.
+       */
+      RATE_LIMIT_MAX_REQUESTS: '100000',
+      AUTH_RATE_LIMIT_MAX_REQUESTS: '100000',
     },
   },
 });

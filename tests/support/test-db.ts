@@ -77,6 +77,11 @@ export async function databaseAvailable(): Promise<boolean> {
   } catch {
     available = false;
   }
+  if (!available) {
+    process.stderr.write(
+      'No MongoDB at MONGODB_URI; skipping integration tests. Run `pnpm docker:up`.\n',
+    );
+  }
   return available;
 }
 
