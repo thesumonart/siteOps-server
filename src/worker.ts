@@ -98,6 +98,18 @@ function startHealthServer(port: number): Server {
     send(404, { status: 'not_found' });
   });
 
+  /*
+   * An HTTP server reports a failed bind by emitting `error`, and an
+   * unhandled `error` event takes the process down with a raw stack trace.
+   * A port already in use is a normal operational situation — a stale instance
+   * during a rolling deploy — and it deserves a log line an operator can act
+   * on, not an unhandled event.
+   */
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    log.fatal({ err: error, port }, 'health_server.listen_failed');
+    void shutdown('health_server.listen_failed', 1);
+  });
+
   server.listen(port, '0.0.0.0', () => {
     log.info({ port }, 'health_server.listening');
   });
@@ -128,27 +140,62 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   // Never let the watchdog itself keep the process alive.
   watchdog.unref();
 
-  try {
+  /*
+   * Each step is attempted independently.
+   *
+   * A single try/catch around all of them means the first failure skips the
+   * rest — and the step that must never be skipped is draining the database
+   * pool, because an open pool holds the process alive with nothing left to do.
+   * That is a hang rather than an exit, and the watchdog then has to kill a
+   * process that was one call away from finishing cleanly.
+   */
+  const failures = [
     // Stop claiming new work and wait for any check already in flight to
     // finish — its own lease release still runs even if this wait times out,
     // since that lives in a `finally` block inside `monitoring.job.ts`.
-    await state.schedulerLoop?.stop();
+    await attempt('worker.scheduler_stop_failed', async () => {
+      await state.schedulerLoop?.stop();
+    }),
+    await attempt('worker.health_server_close_failed', closeHealthServer),
+    await attempt('worker.database_disconnect_failed', disconnectFromDatabase),
+  ].filter(Boolean).length;
 
-    if (state.healthServer) {
-      await new Promise<void>((resolve) => {
-        state.healthServer?.close(() => {
-          resolve();
-        });
-      });
-    }
-    await disconnectFromDatabase();
-    log.info('worker.shutdown_complete');
-  } catch (error) {
-    log.error({ err: error }, 'worker.shutdown_failed');
+  if (failures > 0) {
     process.exitCode = 1;
-  } finally {
-    clearTimeout(watchdog);
+    log.error({ signal, failures }, 'worker.shutdown_failed');
+  } else {
+    log.info('worker.shutdown_complete');
   }
+
+  clearTimeout(watchdog);
+}
+
+/** Runs one shutdown step, logging rather than propagating a failure. */
+async function attempt(event: string, step: () => Promise<void>): Promise<boolean> {
+  try {
+    await step();
+    return false;
+  } catch (error) {
+    log.error({ err: error }, event);
+    return true;
+  }
+}
+
+/**
+ * Closes the probe server.
+ *
+ * Skipped when it never bound — which is the normal case when shutdown was
+ * triggered by a failed bind in the first place.
+ */
+async function closeHealthServer(): Promise<void> {
+  const server = state.healthServer;
+  if (!server?.listening) return;
+
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
 }
 
 async function bootstrap(): Promise<void> {

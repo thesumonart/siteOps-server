@@ -52,23 +52,58 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   // Never let the watchdog itself keep the process alive.
   watchdog.unref();
 
-  try {
-    if (state.server) {
-      await new Promise<void>((resolve, reject) => {
-        state.server?.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-    }
-    await disconnectFromDatabase();
-    log.info('api.shutdown_complete');
-  } catch (error) {
-    log.error({ err: error }, 'api.shutdown_failed');
+  /*
+   * Each step is attempted independently.
+   *
+   * A single try/catch around all of them means the first failure skips the
+   * rest — and the step most likely to fail is closing a server that never
+   * successfully bound, while the step that must never be skipped is draining
+   * the database pool. Getting that order wrong leaves an open pool holding the
+   * process alive with nothing left to do, which is a hang rather than an exit.
+   */
+  const failures = [
+    await attempt('api.server_close_failed', closeServer),
+    await attempt('api.database_disconnect_failed', disconnectFromDatabase),
+  ].filter(Boolean).length;
+
+  if (failures > 0) {
     process.exitCode = 1;
-  } finally {
-    clearTimeout(watchdog);
+    log.error({ signal, failures }, 'api.shutdown_failed');
+  } else {
+    log.info('api.shutdown_complete');
   }
+
+  clearTimeout(watchdog);
+}
+
+/** Runs one shutdown step, logging rather than propagating a failure. */
+async function attempt(event: string, step: () => Promise<void>): Promise<boolean> {
+  try {
+    await step();
+    return false;
+  } catch (error) {
+    log.error({ err: error }, event);
+    return true;
+  }
+}
+
+/**
+ * Stops accepting connections and waits for in-flight requests.
+ *
+ * `close()` reports "server was not running" as an error, which is the normal
+ * outcome when shutdown was triggered by a failed bind. That is not a failure
+ * worth reporting, so it resolves.
+ */
+async function closeServer(): Promise<void> {
+  const server = state.server;
+  if (!server?.listening) return;
+
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 async function bootstrap(): Promise<void> {
@@ -86,6 +121,17 @@ async function bootstrap(): Promise<void> {
 
   const server = app.listen(env.PORT, '0.0.0.0', () => {
     log.info({ port: env.PORT, environment: env.NODE_ENV, trustedOrigins }, 'api.started');
+  });
+
+  /*
+   * A failed bind arrives as an `error` event, and an unhandled one takes the
+   * process down with a raw stack trace. A port already in use is a normal
+   * operational situation — a stale instance during a rolling deploy — and it
+   * deserves a log line an operator can act on.
+   */
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    log.fatal({ err: error, port: env.PORT }, 'api.listen_failed');
+    void shutdown('api.listen_failed', 1);
   });
 
   // A client that opens a connection and sends nothing must not hold a socket
