@@ -30,6 +30,22 @@ const REDACTED_PATHS = [
   'RESEND_API_KEY',
 ];
 
+/**
+ * Whether to run the human-readable pretty printer.
+ *
+ * `pino-pretty` is a *transport*, which pino runs in a worker thread. That is
+ * fine for a long-lived server and wrong everywhere else: a short-lived process
+ * — a script, a test worker — can exit while the transport thread is still
+ * starting or flushing, and thread-stream aborts the process when that happens.
+ * It dies without running an exit handler, so it surfaces as an unexplained
+ * "worker exited unexpectedly" rather than as an error anyone can read.
+ *
+ * So the transport is attached only when it has something to print: never in
+ * production, which wants JSON, and never at `silent`, which is what the test
+ * runner sets.
+ */
+const usePrettyTransport = !isProduction && env.LOG_LEVEL !== 'silent';
+
 export const logger: Logger = pino({
   level: env.LOG_LEVEL,
   name: 'siteops',
@@ -38,14 +54,14 @@ export const logger: Logger = pino({
     level: (label) => ({ level: label }),
   },
   timestamp: pino.stdTimeFunctions.isoTime,
-  ...(isProduction
-    ? {}
-    : {
+  ...(usePrettyTransport
+    ? {
         transport: {
           target: 'pino-pretty',
           options: { colorize: true, translateTime: 'HH:MM:ss', ignore: 'pid,hostname' },
         },
-      }),
+      }
+    : {}),
 });
 
 /** Child logger tagged with a subsystem name. */

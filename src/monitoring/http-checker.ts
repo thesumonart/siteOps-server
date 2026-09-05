@@ -302,6 +302,33 @@ export async function checkWebsite(url: string, options: CheckOptions): Promise<
       finalUrl: currentUrl,
     };
   } finally {
+    await closeDispatcher(dispatcher);
+  }
+}
+
+/**
+ * Tears down the connection pool without letting the teardown replace the
+ * result.
+ *
+ * A graceful `close()` waits for in-flight requests, and this function is
+ * reached with a request that was just aborted or whose socket the origin
+ * destroyed — so it can reject. An exception thrown from a `finally` block
+ * *replaces* the value the `try` already produced, which would turn a
+ * perfectly good "the site is down" into a thrown error the caller has to
+ * classify from scratch.
+ *
+ * So: close gracefully, fall back to destroying the pool, and if even that
+ * fails, let it go. The dispatcher is unreachable after this either way, and a
+ * leaked socket is a far smaller problem than a lost check result.
+ */
+async function closeDispatcher(dispatcher: Agent): Promise<void> {
+  try {
     await dispatcher.close();
+  } catch {
+    try {
+      await dispatcher.destroy();
+    } catch {
+      // Nothing further can be done, and nothing depends on it.
+    }
   }
 }
