@@ -1,0 +1,8 @@
+# Not a workspace — this repository is one package. The file exists because
+# pnpm 11 reads install-script policy from here rather than from package.json.
+#
+# Everything not listed is blocked from running a postinstall, so a transitive
+# dependency cannot execute code during `pnpm install`. esbuild is a native
+# toolchain package that legitimately needs one; it backs tsx and Vitest.
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,30 @@
+# Local development dependencies.
+#
+# Only MongoDB is required to run SiteOps locally; the API and worker run on the
+# host via `pnpm dev` for fast reloads. Start with `pnpm docker:up`.
+services:
+  mongo:
+    image: mongo:8
+    container_name: siteops-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--quiet", "--logpath", "/dev/null"]
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Initiates the single-node replica set on first boot. A replica set is
+      # required for the multi-document transaction that creates an organization
+      # together with its first membership.
+      test: >
+        mongosh --quiet --eval "
+          try { rs.status().ok }
+          catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }
+        "
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  mongo-data:

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Formatting and lint run before a commit lands, so CI never fails on something
+# that could have been caught locally in a second.
+set -e
+pnpm format:check
+pnpm lint
