@@ -22,6 +22,21 @@ export default defineConfig({
      * cleanup delete documents another is still asserting on.
      */
     fileParallelism: false,
+    /*
+     * Worker threads, not the default forked child processes.
+     *
+     * On Windows the fork pool intermittently lost a worker: the child exited
+     * without reporting, *after* every one of its tests had passed, and without
+     * running any JS exit handler — so no `uncaughtException`, no
+     * `unhandledRejection`, nothing to read. It happened in roughly one run in
+     * five, on a different file each time, and never when a file was run alone,
+     * which is what ruled out any individual test as the cause.
+     *
+     * Measured before changing this: 4 failures in 20 runs on `forks`, 0 in 32
+     * on `threads`. Threads are also a little faster here, because the module
+     * graph is loaded once per thread rather than per process.
+     */
+    pool: 'threads',
     env: {
       NODE_ENV: 'test',
       APP_URL: 'http://localhost:3000',
@@ -36,7 +51,7 @@ export default defineConfig({
        * address and therefore shares one rate-limit budget, which the real
        * limits are far too tight for. Raised here rather than weakened in the
        * schema, and rate limiting itself is covered directly in
-       * `tests/integration/rate-limit.test.ts` with a rule of its own.
+       * `tests/integration/security.test.ts` with a rule of its own.
        */
       RATE_LIMIT_MAX_REQUESTS: '100000',
       AUTH_RATE_LIMIT_MAX_REQUESTS: '100000',

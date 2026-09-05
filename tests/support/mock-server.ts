@@ -30,18 +30,25 @@ export async function startMockServer(handler: MockHandler): Promise<MockServer>
     url: `http://127.0.0.1:${port}`,
     port,
     close: () =>
-      new Promise<void>((resolve, reject) => {
+      new Promise<void>((resolve) => {
         /*
-         * `server.close()` waits for open connections to end, and the `hang`
-         * handler never ends one — so without this the promise never settles
-         * and the test process keeps a live handle, which surfaces as a worker
-         * that "exited unexpectedly" rather than as an obvious hang.
+         * Stop accepting first, then destroy whatever is left.
+         *
+         * `server.close()` alone waits for open connections to end, and the
+         * `hang` handler never ends one — so the promise would never settle and
+         * the process would keep a live handle. Destroying first, though, can
+         * tear a socket out from under a client that is still finishing with
+         * it, which surfaces later as a worker that "exited unexpectedly"
+         * rather than as anything legible. This order does neither.
+         *
+         * The callback's error is ignored on purpose: "the server was already
+         * closed" is the only thing it reports here, and a test that has
+         * finished has nothing to do with that.
          */
-        server.closeAllConnections();
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
+        server.close(() => {
+          resolve();
         });
+        server.closeAllConnections();
       }),
   };
 }
