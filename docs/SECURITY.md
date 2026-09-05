@@ -1,0 +1,227 @@
+# Security
+
+The rules in this document are not style preferences. Each one exists because weakening it has a
+specific, describable consequence.
+
+## SSRF: the defining risk of this product
+
+SiteOps makes HTTP requests to URLs chosen by users. Without care, that is an open proxy into
+whatever private network the worker runs in — and on a cloud host, into the instance metadata
+endpoint that hands out credentials.
+
+Defence is in **two layers**, and neither is sufficient alone.
+
+### Layer 1 — string validation, at creation time
+
+`src/contracts/url/normalize.ts`, run by `websiteUrlSchema` when a website is added or edited, and
+again inside `WebsiteService` so the service holds on its own rather than trusting a caller used
+the middleware.
+
+It refuses:
+
+- any scheme but `http:` and `https:`
+- credentials in the URL (they would be logged and mailed in incident notifications)
+- `localhost`, `ip6-localhost`, `metadata`, `metadata.google.internal`, `instance-data`
+- reserved and internal suffixes: `.local`, `.internal`, `.corp`, `.lan`, `.home.arpa`, `.test`,
+  `.invalid`, `.onion`, `.in-addr.arpa`, and the rest of the list in that file
+- single-label hostnames (`router`, `intranet`) — almost always resolved through a search domain
+- any IP literal that is not provably public unicast
+
+IP classification lives in `src/contracts/url/ip.ts`. Notable choices:
+
+- **Short and zero-padded IPv4 forms are rejected, not normalized.** `127.1` and `0177.0.0.1` are
+  both accepted as loopback by some resolvers, so treating them as invalid stops the blocklist
+  being bypassed by notation.
+- **IPv4-mapped and IPv4-compatible IPv6 are judged by the address they carry**, or
+  `::ffff:127.0.0.1` reaches loopback.
+- **6to4 (`2002::/16`) and NAT64 (`64:ff9b::/96`) are unwrapped** and the embedded IPv4 classified.
+- A **zone index** (`fe80::1%eth0`) never makes an address public, so it is stripped and the
+  address itself classified.
+
+Blocked IPv4 ranges cover RFC 1122, 1918, 3927, 5735 and 6598, plus `169.254.0.0/16` — the
+link-local range that carries AWS, GCP and Azure instance metadata.
+
+### Layer 2 — the resolved address, immediately before connecting
+
+**This is the authoritative check.** DNS can change between the moment a website is added and the
+moment it is checked, so string validation cannot be trusted at request time. That gap is DNS
+rebinding, and only this layer closes it.
+
+`src/monitoring/safe-lookup.ts` installs a custom `lookup` on the socket, so the address the guard
+approves is the exact address the kernel connects to. Resolving separately and then connecting by
+hostname would re-query DNS and could land somewhere unvalidated.
+
+A hostname resolving to both a public and a private address returns **only the public ones**. All
+addresses must be refused for the connection to fail, but a private address is never handed back.
+
+### Redirects are followed by hand
+
+`src/monitoring/http-checker.ts` follows redirects itself rather than letting the HTTP client do
+it, so every hop is re-validated — both its URL string and, through the lookup, the address it
+resolves to. A public URL that 302s into cloud metadata is refused mid-chain.
+
+The string check runs again on **every hop**, and that is not redundant with the address guard:
+Node's socket layer skips a custom `lookup` entirely when the host is already an IP literal
+(`net.isIP()` short-circuits it), so a redirect straight to `http://169.254.169.254/` would never
+reach `safe-lookup.ts`. The per-hop string check is what actually catches that case.
+
+Connections are not pooled across checks (`pipelining: 0`, a fresh `Agent` per check): a reused
+socket would skip the lookup, and with it the guard, on a later request.
+
+### `MONITOR_ALLOW_PRIVATE_ADDRESSES`
+
+Test-only, and **refused outright in production** by the environment schema.
+
+It is deliberately narrower than its name suggests: it permits loopback only. Every other blocked
+range — RFC 1918, link-local, cloud metadata, CGNAT — stays blocked with it on, so a test can still
+prove that a redirect into metadata territory is refused.
+
+That narrowness came from a real regression caught by this module's own tests: a first draft
+bypassed the string check for any `blocked_hostname`/`blocked_ip` reason, which let a redirect to
+`169.254.169.254` through in test mode.
+
+### Rules
+
+1. Never weaken either layer.
+2. Never remove an entry from the blocked ranges.
+3. Every new bypass idea gets a test.
+
+## Tenant isolation
+
+```text
+User → Organization membership → Role → Permissions → Resource
+```
+
+1. **Never trust an organization id from the client.** `X-Organization-Id` and any
+   `:organizationId` path parameter are _hints_. `requireOrganization` re-resolves membership from
+   the session on every request, and only the role stored server-side decides what is allowed.
+2. **Another tenant's resource is a 404, never a 403.** A 403 confirms the identifier exists, which
+   turns the endpoint into an oracle for enumerating other tenants.
+3. **Every repository method takes the organization id** and filters on it. Isolation is a property
+   of the layer, not a habit of the caller.
+4. **Check permissions, never role names.** `hasEveryPermission(role, required)`; a capability
+   change happens in `contracts/domain/permissions.ts` rather than across every route.
+
+`tests/integration/tenant-isolation.test.ts` asserts all of this against a real database and a real
+middleware chain, including a forged header on a genuine session.
+
+## Authentication
+
+Better Auth owns password hashing, session issuing and token lifecycles. **Never hand-roll any of
+them.**
+
+| Property     | Value                                                       | Why                                                                                                                                                                                           |
+| ------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cookie       | `siteops.session_token`, `__Secure-` prefixed in production | The dashboard's routing middleware matches this name.                                                                                                                                         |
+| Flags        | `HttpOnly`, `SameSite=Lax`, `Secure` in production          | Not readable from JavaScript. Lax rather than Strict because a verification link arrives from a mail client as a cross-site navigation, and Strict would drop the cookie on exactly that hop. |
+| Session      | 30 days, refreshed after 1 day of use                       |                                                                                                                                                                                               |
+| Email tokens | 1 hour                                                      | They are bearer credentials: whoever holds the URL can act as the account.                                                                                                                    |
+| Password     | 12–128 characters                                           | Length is what resists offline cracking. A character-class rule is deliberately omitted — it pushes people toward predictable substitutions without adding entropy.                           |
+| Reset        | Revokes every existing session                              | A password change must evict a session an attacker already holds.                                                                                                                             |
+
+**Email verification is required.** An account that has not proven its address cannot reach
+organization data, and is never a notification recipient — it is the same address a stranger could
+have typed at sign-up.
+
+Verification is re-checked on **every request**, not assumed from how the session started: a
+session can outlive a change to the account.
+
+### Enumeration
+
+- Sign-in answers identically whether the address is unknown or the password is wrong — same code,
+  same wording.
+- Sign-up with an existing address answers **200 with a synthetic id and writes nothing**. A
+  distinguishable response is exactly what a credential-stuffing list is built from. The existing
+  account's password is never replaced; `tests/integration/auth.test.ts` asserts that.
+- Password reset always succeeds, even for an unknown address.
+
+## Invitations
+
+- Only the **SHA-256 hash** of the token is stored. A leaked database yields no working links.
+- No salt and no stretching, deliberately: the input is 256 bits of randomness, not a password, so
+  there is nothing for a rainbow table or a brute-force to shorten.
+- Acceptance requires holding the token **and** being signed in as the address it was sent to,
+  compared in **constant time** so acceptance cannot be probed by timing.
+- Seven-day expiry, single use, revocable.
+
+## Transport and headers
+
+`helmet` with a CSP of `default-src 'none'; frame-ancestors 'none'` — this API serves JSON, so a
+restrictive policy costs nothing and hardens any error page a browser renders. Plus
+`Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: same-site`, and HSTS for a year with
+subdomains in production.
+
+`x-powered-by` is disabled. Nothing good comes of naming the framework and its version.
+
+### CORS
+
+An **explicit allowlist**, never a reflected origin. These requests carry the session cookie, so
+echoing back whatever `Origin` arrives would let any page on the internet act as the signed-in
+user. `Vary: Origin` is always sent, including for a rejected origin, so a cache cannot replay one
+origin's response for another.
+
+## Rate limiting
+
+Fixed-window, keyed by client address **and** scope, so hammering the sign-in form cannot exhaust
+an attacker's budget for reading the dashboard, and one abusive client cannot lock everyone else
+out of an endpoint.
+
+Sign-in and sign-up share one scope: alternating between them must not double the budget. Every
+endpoint that sends an email has a tighter budget, which protects the sending reputation of the
+domain as much as it protects the account.
+
+**Known limitation:** counters are per-process, so with several API instances the effective limit
+is `limit × instances`. That is acceptable for a single-instance deployment. The interface is one
+`consume` call, so it can be re-implemented over a shared store without touching a caller.
+
+`TRUST_PROXY` must be enabled **only** behind a proxy that actually sets `X-Forwarded-For`. With no
+proxy in front, enabling it lets any client choose its own address and get a fresh budget per
+request.
+
+## Input
+
+Everything external is validated with Zod before a handler sees it: bodies, query strings, route
+parameters. TypeScript types are erased at runtime and validate nothing.
+
+The schemas live in `src/contracts/schemas` and the dashboard imports the same file, so the browser
+form and the API enforce literally the same rule. Never write a looser server-side variant.
+
+Bodies are capped at 100kb. A monitoring payload is small; a generous limit only helps an attacker.
+
+Route parameters are validated as ObjectIds before any query. Without that,
+`new Types.ObjectId('nope')` throws inside a query builder and turns what should be a 400 into a 500.
+
+User-supplied search text is escaped before it becomes a regex, so it cannot smuggle regex syntax
+into a query.
+
+## Errors and logging
+
+**Never returned to a client:** stack traces, driver errors, MongoDB error text, file paths,
+connection strings, environment values. `errorHandler` logs the full error server-side and answers
+with a message written for a person. A duplicate-key error does not say which index collided —
+for `user.email` that would confirm an address is registered.
+
+**Never logged:** passwords, tokens, cookies, API keys, secrets. The redaction list in
+`src/utils/logger.ts` is the guarantee, rather than the discipline of whoever writes the next log
+line.
+
+Request bodies are never logged. Neither are query strings — a verification or reset link puts a
+working credential in one, and a log aggregator is the wrong place for that to end up.
+
+Every request carries a correlation id, echoed as `X-Request-Id`. A client-supplied id is honoured
+only when it matches `^[A-Za-z0-9_-]{1,64}$`; anything else is replaced. Reflecting arbitrary text
+into a response header is how header injection and log forgery start.
+
+## Secrets
+
+- Never commit `.env`. It is git-ignored, and `.env.example` carries placeholders only.
+- `AUTH_SECRET` is at least 32 characters and validated at startup.
+- Configuration is read in exactly one module. An ESLint rule makes reading the raw environment
+  anywhere else an error, so a misconfigured process fails at startup rather than on first request.
+- Startup validation prints field names and messages but **never values** — that output reaches
+  logs, and the offending value is often the secret itself.
+
+## Reporting
+
+This is a private repository. Raise a security concern directly with the maintainer rather than in
+a public issue.
