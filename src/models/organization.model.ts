@@ -1,5 +1,10 @@
-import { DEFAULT_PLAN, PLANS } from '../contracts/index.js';
-import type { Plan } from '../contracts/index.js';
+import {
+  DEFAULT_PLAN,
+  PLANS,
+  SUBSCRIPTION_STATUSES,
+  BILLING_INTERVALS,
+} from '../contracts/index.js';
+import type { BillingInterval, Plan, SubscriptionStatus } from '../contracts/index.js';
 import mongoose, { Schema, model, type HydratedDocument, type Model, type Types } from 'mongoose';
 
 /**
@@ -24,6 +29,47 @@ export interface OrganizationBranding {
   supportEmail: string | null;
 }
 
+/**
+ * The organization's subscription, mirrored from the payment provider.
+ *
+ * Every field here is provider-owned truth. Nothing in SiteOps writes it in
+ * response to a user action — the only writer is the webhook handler, reacting
+ * to an event the provider signed. A user clicking "Upgrade" opens a checkout
+ * session; the plan changes when the provider says it did, not when the browser
+ * comes back.
+ *
+ * It is embedded rather than a collection of its own because an organization
+ * has exactly one subscription and is never read without it: a separate
+ * document would be a join on every entitlement check, for a one-to-one
+ * relationship that cannot become one-to-many. Invoices and payment history
+ * stay at the provider, which already renders them better than SiteOps would.
+ *
+ * `plan` deliberately does *not* live here. It stays on the organization, where
+ * `EntitlementService` has always read it — so an organization with no billing
+ * record at all is still a perfectly valid free-plan tenant, and a provider
+ * outage cannot make every plan lookup fail.
+ */
+export interface OrganizationBilling {
+  /** Provider customer id. Null until the first checkout completes. */
+  customerId: string | null;
+  subscriptionId: string | null;
+  status: SubscriptionStatus;
+  interval: BillingInterval | null;
+  currentPeriodEnd: Date | null;
+  cancelAtPeriodEnd: boolean;
+  trialEndsAt: Date | null;
+  /**
+   * Provider clock for the last event applied.
+   *
+   * Webhooks are not ordered. Stripe will happily deliver a `deleted` and an
+   * `updated` for the same subscription out of sequence, and applying the older
+   * one second would leave the organization on the wrong plan indefinitely.
+   * An event whose timestamp is older than this one is acknowledged and
+   * discarded — see `BillingService.applySubscriptionState`.
+   */
+  lastEventAt: Date | null;
+}
+
 export interface OrganizationAttributes {
   name: string;
   slug: string;
@@ -31,6 +77,7 @@ export interface OrganizationAttributes {
   /** IANA zone used to render timestamps for everyone in the organization. */
   timezone: string;
   branding: OrganizationBranding;
+  billing: OrganizationBilling;
   createdByUserId: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -80,6 +127,32 @@ const organizationSchema = new Schema<OrganizationAttributes>(
         supportEmail: null,
       }),
     },
+    billing: {
+      type: new Schema<OrganizationBilling>(
+        {
+          customerId: { type: String, default: null, maxlength: 255 },
+          subscriptionId: { type: String, default: null, maxlength: 255 },
+          status: { type: String, required: true, enum: SUBSCRIPTION_STATUSES, default: 'none' },
+          interval: { type: String, default: null, enum: [...BILLING_INTERVALS, null] },
+          currentPeriodEnd: { type: Date, default: null },
+          cancelAtPeriodEnd: { type: Boolean, required: true, default: false },
+          trialEndsAt: { type: Date, default: null },
+          lastEventAt: { type: Date, default: null },
+        },
+        { _id: false },
+      ),
+      required: true,
+      default: () => ({
+        customerId: null,
+        subscriptionId: null,
+        status: 'none',
+        interval: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        trialEndsAt: null,
+        lastEventAt: null,
+      }),
+    },
     createdByUserId: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
   },
   { timestamps: true, collection: 'organizations' },
@@ -87,6 +160,29 @@ const organizationSchema = new Schema<OrganizationAttributes>(
 
 // Slugs appear in URLs and must be globally unique.
 organizationSchema.index({ slug: 1 }, { unique: true, name: 'organization_slug_unique' });
+
+/*
+ * Every webhook arrives naming a provider customer and nothing else, so this is
+ * the lookup on the hot path of billing. Unique, because two organizations
+ * sharing one provider customer would mean a single payment silently entitling
+ * both.
+ *
+ * `partialFilterExpression` rather than `sparse`, and the difference is not
+ * cosmetic: sparse excludes documents where the field is *absent*, but the
+ * schema default above writes an explicit `null`. Every organization would
+ * therefore carry an indexed `null`, and a unique index would allow exactly one
+ * of them to exist. Filtering on `$type: 'string'` indexes only organizations
+ * that actually have a customer, which is both the correct constraint and the
+ * smaller index.
+ */
+organizationSchema.index(
+  { 'billing.customerId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: { 'billing.customerId': { $type: 'string' } },
+    name: 'organization_billing_customer_unique',
+  },
+);
 
 export const OrganizationModel: Model<OrganizationAttributes> =
   (mongoose.models.Organization as Model<OrganizationAttributes> | undefined) ??

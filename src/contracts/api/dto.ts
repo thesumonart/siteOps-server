@@ -1,4 +1,5 @@
 import { type AuditAction, type AuditArea } from '../domain/audit.js';
+import { type BillingInterval, type SubscriptionStatus } from '../domain/billing.js';
 import { type CheckErrorType, type CheckStatus, type StatsRange } from '../domain/check.js';
 import { type ClientStatus } from '../domain/client.js';
 import {
@@ -83,6 +84,82 @@ export interface PlanUsageDto {
   readonly customDomains: number;
   readonly apiRequestsToday: number;
   readonly aiGenerationsThisMonth: number;
+}
+
+/**
+ * The organization's subscription, as the dashboard sees it.
+ *
+ * Deliberately narrow. The provider's customer and subscription identifiers are
+ * *not* here: the dashboard never needs them, every billing route derives them
+ * from the organization document, and an identifier that never reaches the
+ * browser is an identifier that cannot be substituted in a request.
+ */
+export interface SubscriptionDto {
+  readonly plan: Plan;
+  readonly status: SubscriptionStatus;
+  /** Null until the organization has bought something. */
+  readonly interval: BillingInterval | null;
+  /** End of the paid period — the renewal date, or the cut-off if cancelling. */
+  readonly currentPeriodEnd: string | null;
+  /** True when the subscription runs to `currentPeriodEnd` and then stops. */
+  readonly cancelAtPeriodEnd: boolean;
+  readonly trialEndsAt: string | null;
+  /**
+   * Whether this deployment has a payment provider configured at all.
+   *
+   * Sent so the dashboard can say "billing is not configured on this
+   * deployment" rather than offering an upgrade button that cannot work. It
+   * describes the server, never the customer.
+   */
+  readonly billingConfigured: boolean;
+  /**
+   * Whether a provider-hosted management portal can be opened.
+   *
+   * False before the first purchase: there is no customer record to manage yet,
+   * so the only meaningful action is checkout.
+   */
+  readonly canManage: boolean;
+}
+
+/**
+ * One plan as the pricing table renders it.
+ *
+ * Public — this is served unauthenticated so the marketing page can be a static
+ * render — and therefore carries nothing but the plan's own description.
+ */
+export interface PlanCatalogEntryDto {
+  readonly plan: Plan;
+  readonly name: string;
+  readonly tagline: string;
+  readonly currency: string;
+  /** Minor units. Zero for the free plan. */
+  readonly monthlyPrice: number;
+  readonly yearlyPrice: number;
+  /** Months saved by paying yearly, derived from the two prices above. */
+  readonly yearlyMonthsFree: number;
+  readonly limits: PlanLimits;
+  readonly features: readonly PlanFeature[];
+  readonly purchasable: boolean;
+  readonly featured: boolean;
+}
+
+export interface PlanCatalogDto {
+  readonly plans: readonly PlanCatalogEntryDto[];
+  /** Labels for every feature id, so the client renders one vocabulary. */
+  readonly featureLabels: Record<PlanFeature, string>;
+  /** False when no payment provider is configured on this deployment. */
+  readonly billingConfigured: boolean;
+}
+
+/**
+ * Where to send the browser to complete a billing action.
+ *
+ * A URL and nothing else. The session it points at was created server-side from
+ * a plan identifier, so the price, the quantity and the customer are all chosen
+ * by the server — there is no field here a caller could have influenced.
+ */
+export interface BillingRedirectDto {
+  readonly url: string;
 }
 
 export interface OrganizationMembershipDto {

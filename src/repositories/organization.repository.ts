@@ -1,6 +1,11 @@
 import type { Types } from 'mongoose';
 
-import type { OrganizationRole, Plan } from '../contracts/index.js';
+import type {
+  BillingInterval,
+  OrganizationRole,
+  Plan,
+  SubscriptionStatus,
+} from '../contracts/index.js';
 import {
   OrganizationMemberModel,
   OrganizationModel,
@@ -214,5 +219,98 @@ export class OrganizationRepository {
   async planFor(organizationId: string): Promise<Plan | null> {
     const organization = await this.findById(organizationId);
     return organization?.plan ?? null;
+  }
+
+  /**
+   * Finds the organization a provider customer belongs to.
+   *
+   * This is how a webhook is routed: the payload names a customer, never an
+   * organization, because the provider has never heard of our tenancy. Backed
+   * by the unique sparse index on `billing.customerId`, so a missing customer
+   * is a cheap miss rather than a collection scan.
+   */
+  async findByBillingCustomerId(customerId: string): Promise<OrganizationRecord | null> {
+    if (customerId.length === 0) return null;
+    return OrganizationModel.findOne({ 'billing.customerId': customerId })
+      .lean<OrganizationRecord>()
+      .exec();
+  }
+
+  /**
+   * Records the provider customer for an organization, once.
+   *
+   * Conditional on the field still being unset, so two checkout sessions opened
+   * from two tabs cannot end with the second overwriting the first — the loser
+   * gets `null` back and the caller reuses the customer that already exists.
+   * Without that condition the organization would end up pointing at one
+   * customer while the provider holds a subscription against the other.
+   */
+  async attachBillingCustomer(
+    organizationId: Types.ObjectId,
+    customerId: string,
+  ): Promise<OrganizationRecord | null> {
+    return OrganizationModel.findOneAndUpdate(
+      {
+        _id: organizationId,
+        $or: [{ 'billing.customerId': null }, { 'billing.customerId': { $exists: false } }],
+      },
+      { $set: { 'billing.customerId': customerId } },
+      { returnDocument: 'after' },
+    )
+      .lean<OrganizationRecord>()
+      .exec();
+  }
+
+  /**
+   * Applies subscription state from a provider event.
+   *
+   * Writes the plan and the billing record together in one update: they are one
+   * fact, and an interleaved failure that set the plan without the status —
+   * or the reverse — would leave an organization whose entitlements and whose
+   * billing page disagree.
+   *
+   * The `lastEventAt` guard makes the write a no-op for an event older than the
+   * one already applied. Webhooks are not ordered, and a late `updated`
+   * overwriting a newer `deleted` is exactly the bug that leaves a cancelled
+   * customer on a paid plan forever.
+   */
+  async applySubscriptionState(
+    organizationId: Types.ObjectId,
+    state: {
+      readonly plan: Plan;
+      readonly status: SubscriptionStatus;
+      readonly subscriptionId: string | null;
+      readonly interval: BillingInterval | null;
+      readonly currentPeriodEnd: Date | null;
+      readonly cancelAtPeriodEnd: boolean;
+      readonly trialEndsAt: Date | null;
+      readonly eventAt: Date;
+    },
+  ): Promise<OrganizationRecord | null> {
+    return OrganizationModel.findOneAndUpdate(
+      {
+        _id: organizationId,
+        $or: [
+          { 'billing.lastEventAt': null },
+          { 'billing.lastEventAt': { $exists: false } },
+          { 'billing.lastEventAt': { $lte: state.eventAt } },
+        ],
+      },
+      {
+        $set: {
+          plan: state.plan,
+          'billing.status': state.status,
+          'billing.subscriptionId': state.subscriptionId,
+          'billing.interval': state.interval,
+          'billing.currentPeriodEnd': state.currentPeriodEnd,
+          'billing.cancelAtPeriodEnd': state.cancelAtPeriodEnd,
+          'billing.trialEndsAt': state.trialEndsAt,
+          'billing.lastEventAt': state.eventAt,
+        },
+      },
+      { returnDocument: 'after' },
+    )
+      .lean<OrganizationRecord>()
+      .exec();
   }
 }

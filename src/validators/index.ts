@@ -13,6 +13,7 @@
  */
 
 export * from './audit.validator.js';
+export * from './billing.validator.js';
 export * from './client.validator.js';
 export * from './common.validator.js';
 export * from './incident.validator.js';

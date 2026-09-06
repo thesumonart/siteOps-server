@@ -1,6 +1,9 @@
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 
+import { StripeProvider } from './billing/stripe-provider.js';
+import type { BillingProvider } from './billing/billing-provider.js';
+import { PriceCatalog } from './billing/price-catalog.js';
 import { AUTH_BASE_PATH, createAuth } from './config/auth.js';
 import { corsMiddleware } from './config/cors.js';
 import { env, isProduction } from './config/env.js';
@@ -13,6 +16,7 @@ import { notFoundHandler } from './middlewares/not-found.middleware.js';
 import { defaultRateLimit } from './middlewares/rate-limit.middleware.js';
 import { requestId } from './middlewares/request-id.middleware.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
+import { BillingEventRepository } from './repositories/billing-event.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
 import { ClientRepository } from './repositories/client.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
@@ -25,6 +29,7 @@ import { WebsiteRepository } from './repositories/website.repository.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
+import { BillingService } from './services/billing.service.js';
 import { ClientService } from './services/client.service.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
@@ -120,6 +125,7 @@ export function createApp(): Express {
   const monitorRepository = new MonitorRepository();
   const reportRepository = new ReportRepository();
   const clientRepository = new ClientRepository();
+  const billingEventRepository = new BillingEventRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -170,6 +176,23 @@ export function createApp(): Express {
     websiteRepository,
   );
   const notificationService = new NotificationService(notificationRepository);
+
+  /*
+   * Billing is constructed even when no provider is configured. The service
+   * then refuses every write with `BILLING_NOT_CONFIGURED` and still serves the
+   * plan catalogue and the organization's (free) subscription — which is what
+   * lets the dashboard render an honest billing page on a deployment that
+   * cannot take a payment, instead of a 404 or a fabricated checkout.
+   */
+  const priceCatalog = buildPriceCatalog();
+  const billingService = new BillingService({
+    provider: buildBillingProvider(priceCatalog),
+    prices: priceCatalog,
+    organizations: organizationRepository,
+    events: billingEventRepository,
+    audit: auditService,
+    appUrl: env.APP_URL,
+  });
   const brandingService = new BrandingService();
   const reportGenerationService = new ReportGenerationService(
     reportRepository,
@@ -182,6 +205,7 @@ export function createApp(): Express {
     organizations: organizationRepository,
     authService,
     auditService,
+    billingService,
     clientService,
     entitlementService,
     organizationService,
@@ -203,6 +227,43 @@ export function createApp(): Express {
   app.use(errorHandler);
 
   return app;
+}
+
+/**
+ * Maps the configured Stripe price ids onto SiteOps plans.
+ *
+ * Kept beside the wiring rather than inside the catalogue so `PriceCatalog`
+ * stays free of environment access — the ESLint rule that confines `process.env`
+ * to `config/env.ts` is what makes that boundary real rather than a convention.
+ */
+function buildPriceCatalog(): PriceCatalog {
+  return new PriceCatalog({
+    starter_month: env.STRIPE_PRICE_STARTER_MONTHLY,
+    starter_year: env.STRIPE_PRICE_STARTER_YEARLY,
+    agency_month: env.STRIPE_PRICE_AGENCY_MONTHLY,
+    agency_year: env.STRIPE_PRICE_AGENCY_YEARLY,
+    pro_month: env.STRIPE_PRICE_PRO_MONTHLY,
+    pro_year: env.STRIPE_PRICE_PRO_YEARLY,
+  });
+}
+
+/**
+ * The payment provider, or null when this deployment has no credentials.
+ *
+ * Null is a supported state, not a degraded one: SiteOps runs perfectly well as
+ * a single-tenant or self-hosted install that never charges anyone, and the
+ * whole product works on the free plan. What it must never do is pretend — so
+ * there is no stub implementation here, only a provider or its absence.
+ */
+function buildBillingProvider(prices: PriceCatalog): BillingProvider | null {
+  const secretKey = env.STRIPE_SECRET_KEY;
+  const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
+
+  // The environment schema already refuses a secret key without a webhook
+  // secret; this narrows the types and keeps the invariant local.
+  if (!secretKey || !webhookSecret) return null;
+
+  return new StripeProvider({ secretKey, webhookSecret, prices });
 }
 
 /**

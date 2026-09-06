@@ -37,6 +37,10 @@ Version choices that are deliberate and must not be "upgraded" casually:
   unique indexes that already provide one.
 - **Rate limiting is hand-written** in `src/utils/rate-limiter.ts`. Simple enough not to warrant a
   dependency; the interface is one `consume` call.
+- **No Stripe SDK.** `src/billing/stripe-provider.ts` calls four REST endpoints with `undici` and
+  verifies webhook signatures with `node:crypto`, the same way the PageSpeed provider is written. A
+  dependency shipping a hundred more endpoints is a larger supply-chain surface than the code it
+  saves, and the signature check is directly unit-testable here without a key or a network.
 - **CORS is hand-written** in `src/config/cors.ts`. Fifteen lines, security-critical, worth reading
   in full.
 
@@ -53,6 +57,7 @@ src/routes/         Route tables            src/middlewares/   Guards and plumbi
 src/validators/     Per-route schema bundles
 src/errors/         ApiError, global handler
 src/responses/      The envelope
+src/billing/        Payment provider interface, Stripe adapter, price catalogue
 src/monitoring/     SSRF guards, checker, incident rules
 src/queues/         The MongoDB-backed work queue
 src/jobs/           Scheduler loop, per-website job
@@ -124,6 +129,10 @@ These are not style preferences.
 5. **Errors.** Never return a stack trace, driver error or internal path to a client.
 6. **Auth.** Never hand-roll password hashing or session management. That is Better Auth's job.
 7. **`MONITOR_ALLOW_PRIVATE_ADDRESSES`** exists for tests only and is refused in production.
+8. **Billing.** `organization.plan` is written by exactly one code path: the webhook handler, after
+   a signature verifies. No route sets it, and no request carries a price — a checkout names a plan
+   and the price id is resolved server-side. Never add an endpoint that changes a plan directly,
+   and never trust the browser's return from checkout as evidence of payment.
 
 ## Client compatibility
 

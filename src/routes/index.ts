@@ -3,6 +3,7 @@ import { Router } from 'express';
 import type { OrganizationRepository } from '../repositories/organization.repository.js';
 import type { AuditService } from '../services/audit.service.js';
 import type { AuthService } from '../services/auth.service.js';
+import type { BillingService } from '../services/billing.service.js';
 import type { ClientService } from '../services/client.service.js';
 import type { EntitlementService } from '../services/entitlement.service.js';
 import type { IncidentService } from '../services/incident.service.js';
@@ -16,6 +17,7 @@ import type { ReportService } from '../services/report.service.js';
 import type { WebsiteService } from '../services/website.service.js';
 import { auditRoutes } from './audit.routes.js';
 import { authRoutes } from './auth.routes.js';
+import { billingRoutes } from './billing.routes.js';
 import { clientRoutes } from './client.routes.js';
 import { incidentRoutes } from './incident.routes.js';
 import { monitorRoutes } from './monitor.routes.js';
@@ -37,6 +39,7 @@ export interface ApiDependencies {
   readonly organizations: OrganizationRepository;
   readonly authService: AuthService;
   readonly auditService: AuditService;
+  readonly billingService: BillingService;
   readonly clientService: ClientService;
   readonly entitlementService: EntitlementService;
   readonly organizationService: OrganizationService;
@@ -63,6 +66,7 @@ export function apiRoutes(dependencies: ApiDependencies): Router {
   router.use(notificationRoutes(dependencies));
   router.use(auditRoutes(dependencies));
   router.use(clientRoutes(dependencies));
+  router.use(billingRoutes(dependencies));
 
   return router;
 }

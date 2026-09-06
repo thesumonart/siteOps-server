@@ -158,10 +158,45 @@ neither the dashboard nor the product asks for one, so there is none.
 
 ### Subscriptions are a field, not a collection
 
-Billing is not implemented. What exists is `organization.plan` and the server-enforced limits in
-`contracts/domain/plan.ts` — website count, member count, minimum monitoring interval, retention
-window. Limits are read from the stored plan and never from anything the client sends. When a
-payment provider is introduced, that module is where the limits already live.
+An organization has exactly one subscription and is never read without it, so the subscription is
+an embedded `billing` subdocument on `organizations` rather than a collection of its own — a
+separate document would be a join on the path that answers every entitlement question, for a
+one-to-one relationship that cannot become one-to-many. Invoices and payment history stay at the
+provider, which renders them better than SiteOps would.
+
+`organization.plan` deliberately stays _outside_ that subdocument, where `EntitlementService` has
+always read it. An organization with no billing record at all is still a valid free-plan tenant,
+and a provider outage cannot make every plan lookup fail.
+
+Three rules hold across `services/billing.service.ts`:
+
+1. **The plan changes only on a signed provider event.** No route writes it. `startCheckout`
+   returns a redirect URL and nothing else; the webhook handler is the sole caller of
+   `applySubscriptionState`. Forging, replaying or editing the browser's return from checkout
+   changes nothing, because the return trip is not what grants the plan.
+2. **The price never travels in a request.** A checkout names a plan and an interval; the provider
+   price id is resolved server-side from `PriceCatalog`. There is no field a caller could send to
+   be charged less.
+3. **The tenant is resolved from provider-held state** — metadata Stripe stored and echoed, or the
+   unique `billing.customerId` mapping — never from anything carried by the browser between hops.
+
+### SiteOps never mutates a subscription
+
+Checkout creates one; Stripe's hosted customer portal changes, cancels and resumes it. That is not
+a shortcut. Proration on a mid-cycle plan change is genuinely hard, it is wrong in ways that appear
+on a real card, and the portal has solved it along with payment methods, invoices, tax and dunning.
+What SiteOps owns is which plan a checkout is _for_, and mirroring the answer back.
+
+Webhooks are unordered and delivered at least once, so two mechanisms guard the write:
+`billing_events` holds a unique event id claimed before processing (a duplicate delivery stops
+there), and `applySubscriptionState` refuses any event older than `billing.lastEventAt` — without
+which a late `updated` could overwrite a newer `deleted` and leave a cancelled customer on a paid
+plan indefinitely.
+
+Billing is optional. With no `STRIPE_SECRET_KEY` no provider is constructed: the routes answer
+`BILLING_NOT_CONFIGURED`, the catalogue reports `billingConfigured: false`, and the dashboard says
+so. There is no stub provider — a fake checkout URL is the one thing billing code must never
+produce.
 
 ### There is no user controller
 

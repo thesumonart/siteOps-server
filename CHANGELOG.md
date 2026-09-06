@@ -13,6 +13,31 @@ deployed together.
 
 ### Added
 
+- **Billing and subscriptions.** Stripe, behind a provider interface (`src/billing/`), with hosted
+  checkout for the first purchase and the hosted customer portal for every change after it —
+  upgrade, downgrade, cancel, resume, payment method, invoices. SiteOps never mutates a
+  subscription itself: proration is wrong in ways that show up on a real card, and the portal has
+  solved it.
+  - `GET /api/billing/plans` is unauthenticated and serves the public price list, so the marketing
+    page renders the same plans, limits and features the API actually enforces.
+  - `GET /api/organizations/:id/subscription` (`billing:read`),
+    `POST .../billing/checkout` and `POST .../billing/portal` (`billing:manage`) — owner-only, and
+    provider identifiers never leave the server.
+  - `POST /api/billing/webhook` is the only route that writes `organization.plan`. It has no
+    session; its authorization is an HMAC-SHA256 signature verified against the raw body in
+    constant time, inside a 300-second replay window.
+  - Duplicate deliveries are no-ops (unique event id claimed in the new `billing_events`
+    collection); out-of-order deliveries are discarded by a `billing.lastEventAt` guard, so a late
+    `updated` cannot restore a plan that was cancelled.
+  - A checkout request names a plan and an interval and nothing else. The price id is resolved
+    server-side from configuration, so there is no field a caller could send to be charged less.
+  - Entirely optional: with no `STRIPE_SECRET_KEY` no provider is constructed, the routes answer
+    `BILLING_NOT_CONFIGURED`, and the catalogue reports `billingConfigured: false`. There is no
+    stub provider — a fabricated checkout URL is the one thing billing code must never produce.
+- **Plan pricing in the contract.** `contracts/domain/billing.ts` carries the public price list,
+  subscription vocabulary and per-plan taglines, mirrored into the dashboard, so the pricing page
+  and the dashboard's upgrade prompts describe a plan identically. Amounts are in minor units and
+  are display information only; the charge always comes from the Stripe price.
 - **Plan entitlements.** `EntitlementService` is the single place a plan decides whether something
   is allowed. Plans now carry a feature list as well as limits, and the new entitlements endpoint
   reports both alongside current usage, so the dashboard can explain a locked feature instead of

@@ -221,6 +221,73 @@ into a response header is how header injection and log forgery start.
 - Startup validation prints field names and messages but **never values** — that output reaches
   logs, and the offending value is often the secret itself.
 
+## Billing
+
+Billing is the one place where a bug costs money rather than data, so its threat model is written
+out rather than implied.
+
+### The plan is never client-writable
+
+There is no route that sets `organization.plan`. `PATCH /api/organizations/:id` accepts `name` and
+`timezone` and the Zod schema strips everything else, so a `plan` field in that body is ignored
+rather than refused-and-retried. The only writer is `applySubscriptionState`, reachable only from
+the webhook handler, reachable only after a signature verifies. An integration test asserts the
+plan is unchanged after every request shape a caller might reach for.
+
+### The price is never client-supplied
+
+A checkout request names a plan and an interval. The Stripe price id is resolved from
+`PriceCatalog`, built from environment variables at startup. There is no amount, currency, quantity,
+coupon or price field in `startCheckoutSchema` — so "buy Agency at the Professional price" is not a
+request that can be expressed, let alone rejected.
+
+### The checkout return is not evidence of payment
+
+`/dashboard/billing?checkout=success` is a redirect target and nothing more. The dashboard re-reads
+the subscription from the API when it lands; the plan itself was granted (or not) by the webhook.
+Forging that URL grants nothing.
+
+### Webhook verification
+
+`Stripe-Signature` is verified against the **raw** body: HMAC-SHA256 over `${timestamp}.${body}`,
+compared with `timingSafeEqual`, with a 300-second timestamp tolerance. Each element earns its place:
+
+- **Raw body** — a parsed-and-reserialised payload changes key order and whitespace and would never
+  verify, so a route that accepted one would be verifying nothing. The controller asserts it
+  received a Buffer.
+- **Constant-time compare** — a byte-by-byte early return leaks how much of a guess was right.
+  Buffer lengths are checked first, because `timingSafeEqual` throws on a mismatch and a throw is
+  itself a timing signal.
+- **Timestamp tolerance** — without it a captured payload and its signature stay valid forever, and
+  an observed `subscription.updated` could be replayed to restore a plan that is no longer paid for.
+- **Uniform failures** — every rejection is the same opaque 400. Saying whether the timestamp or
+  the digest was wrong tells a caller how to get closer.
+
+`STRIPE_SECRET_KEY` without `STRIPE_WEBHOOK_SECRET` is refused at startup: a deployment that can
+take money but cannot verify that it did would leave every subscription frozen. A `sk_live_` key is
+refused outside production.
+
+### Replay and ordering
+
+Deliveries are at-least-once and unordered. Duplicates are stopped by the unique index on
+`billing_events.eventId`, claimed before processing; out-of-order deliveries are stopped by the
+`billing.lastEventAt` guard on the update. Without the second, a late `updated` could overwrite a
+newer `deleted` and leave a cancelled customer entitled indefinitely.
+
+### Tenant isolation
+
+A portal session is created against the customer id stored on the organization the caller was
+already authorized for — there is no customer id in any request. Webhooks resolve a tenant from
+metadata Stripe stored, or from the unique `billing.customerId` mapping; an event for a customer
+this deployment does not know is logged and ignored, because one Stripe account can serve several
+deployments. Provider identifiers never appear in an API response.
+
+### Authorization
+
+`billing:read` and `billing:manage` are held by `owner` only. An admin can run the product but
+cannot commit the organization to a recurring charge, and cannot see what it pays. `client` holds
+neither, along with nothing else that writes.
+
 ## Reporting
 
 This is a private repository. Raise a security concern directly with the maintainer rather than in

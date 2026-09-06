@@ -254,6 +254,108 @@ A slug is derived from the name when not supplied, suffixed until free. Returns
 
 Permission: `organization:update`. Body: `{ name?, timezone? }`. Returns `OrganizationDto`.
 
+Note what is **not** accepted: `plan`. The plan is server-owned and changes only on a verified
+provider webhook. A `plan` field in this body is stripped by the schema and ignored.
+
+### `GET /api/organizations/:organizationId/entitlements`
+
+Permission: `organization:read` — every role, including `client`, because a member who cannot see
+_why_ an action is unavailable is shown a failure they cannot explain. Returns `EntitlementsDto`:
+the plan, its features, its limits and current usage against each.
+
+Presentation only. Every gated route re-checks the same entitlement itself, so hiding a button and
+enforcing a limit are two separate mechanisms and only the second is authoritative.
+
+---
+
+## Billing and subscriptions
+
+Three rules, enforced by the shape of these endpoints rather than by convention:
+
+- **The plan changes only on a signed webhook.** No route below writes it. Checkout returns a
+  redirect and nothing more.
+- **The price never travels in a request.** A checkout names a plan and an interval; the Stripe
+  price id is resolved server-side from configuration.
+- **The tenant is resolved from provider-held state**, never from anything the browser carries
+  between hops.
+
+When no payment provider is configured, every write below answers `503 BILLING_NOT_CONFIGURED` and
+the catalogue reports `billingConfigured: false`. That is a supported deployment, not a broken one.
+
+### `GET /api/billing/plans`
+
+**No authentication.** The public price list, rendered by the marketing page before anyone has an
+account. Returns `PlanCatalogDto`: every plan in `PLANS` with its name, tagline, prices in minor
+units, limits, features, whether it is purchasable on this deployment, and whether it is featured.
+
+Nothing here varies by caller. Prices are display information — the amount charged always comes
+from the Stripe price object.
+
+### `GET /api/organizations/:organizationId/subscription`
+
+Permission: `billing:read` (owner). Returns `SubscriptionDto`: plan, status, interval, renewal date,
+cancellation and trial state, plus `billingConfigured` and `canManage`.
+
+Provider customer and subscription identifiers are deliberately absent. The dashboard has no use for
+them, and an identifier that never reaches the browser cannot be substituted into a later request.
+
+### `POST /api/organizations/:organizationId/billing/checkout`
+
+Permission: `billing:manage` (owner — committing to a recurring charge is an ownership-level act).
+Body: `{ plan, interval? }` where `plan` is one of `starter`, `agency`, `pro` and `interval` is
+`month` (default) or `year`. Returns `{ url }` to send the browser to.
+
+An organization that already has a live subscription is answered with a **portal** URL instead: a
+second checkout would leave two subscriptions on one customer and bill for both.
+
+Rate limited to 20 per hour.
+
+| Failure                | Status | Code                           |
+| ---------------------- | ------ | ------------------------------ |
+| `free` or unknown plan | 400    | `VALIDATION_ERROR`             |
+| Plan not sold here     | 400    | `BILLING_PLAN_NOT_PURCHASABLE` |
+| No provider configured | 503    | `BILLING_NOT_CONFIGURED`       |
+| Provider unreachable   | 502    | `BILLING_PROVIDER_ERROR`       |
+
+### `POST /api/organizations/:organizationId/billing/portal`
+
+Permission: `billing:manage`. Returns `{ url }` for Stripe's hosted customer portal, where upgrade,
+downgrade, cancellation, payment methods and invoices all live. The session is created against the
+customer id stored on the organization, so it can only ever open the billing of the tenant the
+caller was authorized for.
+
+Rate limited to 20 per hour.
+
+| Failure                | Status | Code                     |
+| ---------------------- | ------ | ------------------------ |
+| No purchase yet        | 400    | `BILLING_NO_CUSTOMER`    |
+| No provider configured | 503    | `BILLING_NOT_CONFIGURED` |
+
+### `POST /api/billing/webhook`
+
+**No authentication and no organization context.** Authorization is the `Stripe-Signature` header,
+verified against the raw request body before a single field is read — HMAC-SHA256 over
+`${timestamp}.${body}`, compared in constant time, with a 300-second replay window.
+
+Mounted with its own `express.raw` parser. A parsed-and-reserialised body would not match the
+signature, so the handler refuses anything that is not a Buffer rather than verifying a
+reconstruction.
+
+Handled events: `checkout.session.completed` (maps the customer to the organization),
+`customer.subscription.created`, `.updated`, `.deleted`. Anything else is acknowledged with 200 and
+ignored — a 4xx would make Stripe retry an event we will never act on and eventually disable the
+endpoint.
+
+Duplicate deliveries are no-ops: the event id is claimed in `billing_events` under a unique index
+before processing. Out-of-order deliveries are discarded: an event older than the last one applied
+fails the `billing.lastEventAt` guard, which is what stops a late `updated` from restoring a
+cancelled plan.
+
+| Failure         | Status | Code                      |
+| --------------- | ------ | ------------------------- |
+| Bad signature   | 400    | `BILLING_WEBHOOK_INVALID` |
+| Stale timestamp | 400    | `BILLING_WEBHOOK_INVALID` |
+
 ---
 
 ## Members and invitations

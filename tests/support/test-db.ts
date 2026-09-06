@@ -2,6 +2,7 @@ import { env } from '../../src/config/env.js';
 import { connectToDatabase, disconnectFromDatabase } from '../../src/database/connection.js';
 import {
   AuditLogModel,
+  BillingEventModel,
   ClientModel,
   IncidentModel,
   InvitationModel,
@@ -52,6 +53,7 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => ReportModel.syncIndexes(),
   () => ReportScheduleModel.syncIndexes(),
   () => AuditLogModel.syncIndexes(),
+  () => BillingEventModel.syncIndexes(),
 ];
 
 const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
@@ -70,6 +72,7 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => ReportModel.deleteMany({}).exec(),
   () => ReportScheduleModel.deleteMany({}).exec(),
   () => AuditLogModel.deleteMany({}).exec(),
+  () => BillingEventModel.deleteMany({}).exec(),
 ];
 
 let connected = false;

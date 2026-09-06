@@ -15,6 +15,7 @@
  */
 
 export * from './audit-log.model.js';
+export * from './billing-event.model.js';
 export * from './check-result.model.js';
 export * from './client.model.js';
 export * from './incident.model.js';

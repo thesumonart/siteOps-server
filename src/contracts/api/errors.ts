@@ -51,6 +51,14 @@ export const API_ERROR_CODES = [
   'REPORT_SCHEDULE_NOT_FOUND',
 
   'PLAN_LIMIT_REACHED',
+
+  // Billing. `BILLING_NOT_CONFIGURED` describes the deployment, not the
+  // customer: it means no payment provider is wired up on this server.
+  'BILLING_NOT_CONFIGURED',
+  'BILLING_PLAN_NOT_PURCHASABLE',
+  'BILLING_NO_CUSTOMER',
+  'BILLING_PROVIDER_ERROR',
+  'BILLING_WEBHOOK_INVALID',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

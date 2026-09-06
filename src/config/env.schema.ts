@@ -101,6 +101,31 @@ export const envSchema = z
      */
     PAGESPEED_API_KEY: z.string().min(1).optional(),
 
+    /* --- Billing ---------------------------------------------------------
+     *
+     * All optional. Without `STRIPE_SECRET_KEY` no payment provider is
+     * constructed at all: the billing routes answer `BILLING_NOT_CONFIGURED`
+     * and the dashboard says so plainly. That is the honest state for a
+     * deployment that does not sell anything — the alternative, a stub that
+     * returns fabricated checkout URLs and fake successes, is the one thing
+     * billing code must never do.
+     *
+     * The price ids are per-deployment because Stripe's test mode and live mode
+     * have different ones, and a plan with no configured price is simply not
+     * sold there: the pricing page still describes it, checkout refuses it with
+     * a clear message.
+     */
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    /** Signing secret for the webhook endpoint, from the Stripe dashboard. */
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    STRIPE_PRICE_STARTER_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRICE_STARTER_YEARLY: z.string().min(1).optional(),
+    STRIPE_PRICE_AGENCY_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRICE_AGENCY_YEARLY: z.string().min(1).optional(),
+    STRIPE_PRICE_PRO_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRICE_PRO_YEARLY: z.string().min(1).optional(),
+
     /**
      * Disables SSRF address filtering so the test suite can reach a mock server
      * on loopback. Enabling it in production would turn the worker into an open
@@ -123,6 +148,33 @@ export const envSchema = z
         code: 'custom',
         path: ['APP_URL'],
         message: 'APP_URL must use https in production; session cookies are Secure-only.',
+      });
+    }
+    /*
+     * A secret key with no webhook secret is the worst of the three states: the
+     * deployment can take money, and then has no verified way to learn that it
+     * did. Every subscription would stay stuck at whatever it was when checkout
+     * opened. Refused everywhere, not just in production, because it is just as
+     * broken locally and far cheaper to notice here.
+     */
+    if (value.STRIPE_SECRET_KEY && !value.STRIPE_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['STRIPE_WEBHOOK_SECRET'],
+        message:
+          'STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set: without it no subscription change can be verified.',
+      });
+    }
+    /*
+     * A live key on a non-production build would charge real cards from a
+     * developer machine or a staging environment. Test keys (`sk_test_`) are
+     * unrestricted.
+     */
+    if (value.NODE_ENV !== 'production' && value.STRIPE_SECRET_KEY?.startsWith('sk_live_')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['STRIPE_SECRET_KEY'],
+        message: 'A live Stripe key must not be used outside production. Use a sk_test_ key.',
       });
     }
     if (value.NODE_ENV === 'production' && value.MONITOR_ALLOW_PRIVATE_ADDRESSES) {

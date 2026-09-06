@@ -24,6 +24,7 @@ end-to-end suite cleans up by addressing them directly. They are not renamed cas
 | `notifications`         | `notification.model.ts`          | app        | One delivery record per recipient per event.    |
 | `notification_settings` | `notification-settings.model.ts` | app        | Per-user, per-organization alert rules.         |
 | `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                               |
+| `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.           |
 
 Two file names read differently from their collections, and both are deliberate:
 `check-result.model.ts` compiles `WebsiteCheckModel` over `website_checks`, and the notification
@@ -48,9 +49,17 @@ Every index below has a stated query. An index with no query is a write cost wit
 
 ### `organizations`
 
-| Index                      | Keys                 | Why                                               |
-| -------------------------- | -------------------- | ------------------------------------------------- |
-| `organization_slug_unique` | `{ slug: 1 }` unique | Slugs appear in URLs and must be globally unique. |
+| Index                                  | Keys                                                             | Why                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `organization_slug_unique`             | `{ slug: 1 }` unique                                             | Slugs appear in URLs and must be globally unique.                          |
+| `organization_billing_customer_unique` | `{ 'billing.customerId': 1 }` unique, partial on `$type: string` | Routes a webhook to a tenant — the payload names a customer, never an org. |
+
+The billing index is **partial, not sparse**, and the distinction is load-bearing. `sparse` excludes
+documents where the field is absent, but the schema writes an explicit `null` default, so every
+organization would carry an indexed `null` and a unique index would permit exactly one to exist.
+Filtering on `$type: 'string'` indexes only organizations that actually have a provider customer.
+Uniqueness matters because two organizations sharing one customer would mean a single payment
+silently entitling both.
 
 ### `organization_members`
 
@@ -195,6 +204,19 @@ people open a few times a month.
 
 The collection is append-only. No route updates or deletes an entry, on any plan, at any role; the
 TTL index is the only thing that removes one.
+
+### `billing_events`
+
+| Index                     | Keys                     | Why                                                    |
+| ------------------------- | ------------------------ | ------------------------------------------------------ |
+| `billing_event_id_unique` | `{ eventId: 1 }` unique  | Makes a duplicate webhook delivery a no-op.            |
+| `billing_event_ttl`       | `{ receivedAt: 1 }`, 30d | Retention; a provider stops retrying long before that. |
+
+The unique index **is** the idempotency guarantee. `BillingEventRepository.claim` inserts and treats
+duplicate key as "someone else has this one" — two workers handling the same retry concurrently both
+attempt the insert and exactly one wins, with no window a `findOne`-then-`insert` would leave open.
+The claim is released if processing then throws, so a transient database failure does not turn the
+provider's retry into a silently dropped subscription change.
 
 ### Auth collections
 
