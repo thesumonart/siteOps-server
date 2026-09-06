@@ -68,6 +68,48 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
   ai_insights: 'AI incident analysis and summaries',
 };
 
+/**
+ * Features a plan grants that SiteOps has not shipped yet.
+ *
+ * They stay in {@link PLAN_DEFINITIONS} because the plan tiers are a pricing
+ * decision that was made up front and the entitlement is already correct — when
+ * each ships, nothing about who may use it has to change. What they must not do
+ * in the meantime is appear on a pricing page as though they were available.
+ *
+ * So this list is the honest half of the contract: `EntitlementService` keeps
+ * granting them, and the plan catalogue reports them separately from the
+ * features a customer can use today. Marketing something that does not exist is
+ * the one thing a pricing page must never do.
+ *
+ * Remove an entry the moment its feature is reachable from the product — a
+ * shipped feature listed here is understated, which is a smaller failure than
+ * the reverse but still a failure.
+ */
+export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = [
+  'slack_notifications',
+  'discord_notifications',
+  'webhooks',
+  'status_pages',
+  'api_access',
+  'custom_domains',
+  'anomaly_detection',
+  'ai_insights',
+];
+
+export function isFeatureAvailable(feature: PlanFeature): boolean {
+  return !UNRELEASED_PLAN_FEATURES.includes(feature);
+}
+
+/** The subset of a plan's features a customer can actually use today. */
+export function availableFeaturesFor(plan: Plan): readonly PlanFeature[] {
+  return PLAN_DEFINITIONS[plan].features.filter(isFeatureAvailable);
+}
+
+/** The rest: granted by the plan, not yet built. */
+export function upcomingFeaturesFor(plan: Plan): readonly PlanFeature[] {
+  return PLAN_DEFINITIONS[plan].features.filter((feature) => !isFeatureAvailable(feature));
+}
+
 export interface PlanLimits {
   readonly maxWebsites: number;
   readonly maxMembers: number;

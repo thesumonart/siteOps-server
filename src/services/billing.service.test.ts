@@ -2,7 +2,16 @@ import { Types } from 'mongoose';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Plan } from '../contracts/index.js';
-import { PLANS, PURCHASABLE_PLANS, PLAN_PRICING, yearlyMonthsFree } from '../contracts/index.js';
+import {
+  PLANS,
+  PLAN_FEATURES,
+  PLAN_PRICING,
+  PURCHASABLE_PLANS,
+  UNRELEASED_PLAN_FEATURES,
+  featuresFor,
+  isFeatureAvailable,
+  yearlyMonthsFree,
+} from '../contracts/index.js';
 import type { BillingWebhookEvent, ProviderSubscription } from '../billing/billing-provider.js';
 import { PriceCatalog } from '../billing/price-catalog.js';
 import { isApiError } from '../errors/ApiError.js';
@@ -201,6 +210,32 @@ describe('BillingService.catalog', () => {
   it('reports billing as unconfigured when there is no provider', () => {
     const catalog = harness({ withProvider: false }).service.catalog();
     expect(catalog.billingConfigured).toBe(false);
+  });
+
+  it('never advertises a feature that is not built yet', () => {
+    const catalog = harness().service.catalog();
+
+    for (const entry of catalog.plans) {
+      for (const feature of entry.features) {
+        // A pricing page that promises something the product does not do is a
+        // support problem the day someone pays for it.
+        expect(isFeatureAvailable(feature)).toBe(true);
+      }
+      for (const feature of entry.upcomingFeatures) {
+        expect(isFeatureAvailable(feature)).toBe(false);
+      }
+    }
+  });
+
+  it('accounts for every feature the plan grants, split between the two lists', () => {
+    const catalog = harness().service.catalog();
+
+    for (const entry of catalog.plans) {
+      const listed = [...entry.features, ...entry.upcomingFeatures].sort();
+      // Nothing may be silently dropped: an entitlement the plan grants has to
+      // appear somewhere, even if only as "not yet".
+      expect(listed).toEqual([...featuresFor(entry.plan)].sort());
+    }
   });
 
   it('carries the same prices and limits the backend enforces', () => {
@@ -560,6 +595,12 @@ describe('plan catalogue consistency', () => {
   it('discounts a yearly plan by exactly two months', () => {
     for (const plan of PURCHASABLE_PLANS) {
       expect(yearlyMonthsFree(plan)).toBe(2);
+    }
+  });
+
+  it('names only real features as unreleased', () => {
+    for (const feature of UNRELEASED_PLAN_FEATURES) {
+      expect(PLAN_FEATURES).toContain(feature);
     }
   });
 

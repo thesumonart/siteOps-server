@@ -178,6 +178,15 @@ is `limit × instances`. That is acceptable for a single-instance deployment. Th
 proxy in front, enabling it lets any client choose its own address and get a fresh budget per
 request.
 
+### The session endpoint has a budget of its own
+
+`GET /api/session` is limited separately from everything else, at
+`SESSION_RATE_LIMIT_MAX_REQUESTS` a minute (default 60). It is the one endpoint every page load
+hits — twice, since a server component renders against it and the browser reads it again — so it
+would otherwise be both the cheapest way to probe the API and the first thing a legitimate burst
+exhausts. Raising it is only appropriate where many sessions share one address, which in practice
+means an end-to-end suite.
+
 ## Input
 
 Everything external is validated with Zod before a handler sees it: bodies, query strings, route

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 
+import { env } from '../config/env.js';
 import { AuthController } from '../controllers/auth.controller.js';
 import { rateLimit } from '../middlewares/rate-limit.middleware.js';
 import { asyncHandler } from '../utils/async-handler.js';
@@ -23,7 +24,11 @@ export function authRoutes(dependencies: ApiDependencies): Router {
 
   router.get(
     '/session',
-    rateLimit({ limit: 60, windowSeconds: 60, scope: 'session-read' }),
+    rateLimit({
+      limit: env.SESSION_RATE_LIMIT_MAX_REQUESTS,
+      windowSeconds: 60,
+      scope: 'session-read',
+    }),
     asyncHandler(controller.currentSession),
   );
 

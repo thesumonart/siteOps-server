@@ -14,10 +14,11 @@ import {
   PLAN_LABELS,
   PLAN_PRICING,
   PLAN_TAGLINES,
-  featuresFor,
+  availableFeaturesFor,
   isEntitledStatus,
   isPurchasablePlan,
   limitsFor,
+  upcomingFeaturesFor,
   yearlyMonthsFree,
 } from '../contracts/index.js';
 import type { BillingProvider, BillingWebhookEvent } from '../billing/billing-provider.js';
@@ -123,7 +124,8 @@ export class BillingService {
       yearlyPrice: PLAN_PRICING[plan].yearly,
       yearlyMonthsFree: yearlyMonthsFree(plan),
       limits: limitsFor(plan),
-      features: featuresFor(plan),
+      features: availableFeaturesFor(plan),
+      upcomingFeatures: upcomingFeaturesFor(plan),
       // The free plan is always available and never "purchasable": signing up
       // is how you get it.
       purchasable: isPurchasablePlan(plan) && sellable.has(plan),

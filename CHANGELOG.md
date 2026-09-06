@@ -34,6 +34,16 @@ deployed together.
   - Entirely optional: with no `STRIPE_SECRET_KEY` no provider is constructed, the routes answer
     `BILLING_NOT_CONFIGURED`, and the catalogue reports `billingConfigured: false`. There is no
     stub provider — a fabricated checkout URL is the one thing billing code must never produce.
+- **Feature availability is part of the contract.** `UNRELEASED_PLAN_FEATURES` names the eight
+  entitlements the plans grant but the product has not built yet — integrations, status pages, API
+  access, custom domains, anomaly detection and AI insights. The plan catalogue reports them
+  separately from what a customer can use today, so the pricing page can say "coming soon" instead
+  of advertising them as available. Entitlements are unchanged: when each ships, nothing about who
+  may use it has to change.
+- `SESSION_RATE_LIMIT_MAX_REQUESTS` (default 60) gives `GET /api/session` a budget of its own. It
+  is the one endpoint every page load hits — twice, since a server component renders against it and
+  the browser reads it again — and it was previously a hard-coded 60 that a full end-to-end run
+  exceeded, failing the last spec with a rendered server error rather than an assertion.
 - **Plan pricing in the contract.** `contracts/domain/billing.ts` carries the public price list,
   subscription vocabulary and per-plan taglines, mirrored into the dashboard, so the pricing page
   and the dashboard's upgrade prompts describe a plan identically. Amounts are in minor units and

@@ -64,6 +64,16 @@ export const envSchema = z
     RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
     RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(1).default(120),
     AUTH_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(1).default(10),
+    /**
+     * Budget for `GET /api/session`, per minute per address.
+     *
+     * Its own setting because it is the one endpoint every page load hits —
+     * twice, since a server component renders against it and the browser reads
+     * it again. Sixty is generous for a person and tight enough to bound the
+     * cheapest way to probe the API. It is raised only where many sessions
+     * share one address, which in practice means an end-to-end suite.
+     */
+    SESSION_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(1).default(60),
 
     /** Trust `X-Forwarded-For` only behind a proxy that actually sets it. */
     TRUST_PROXY: booleanFromEnv.default(false),

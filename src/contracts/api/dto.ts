@@ -138,7 +138,16 @@ export interface PlanCatalogEntryDto {
   /** Months saved by paying yearly, derived from the two prices above. */
   readonly yearlyMonthsFree: number;
   readonly limits: PlanLimits;
+  /** Features a customer on this plan can use today. */
   readonly features: readonly PlanFeature[];
+  /**
+   * Features the plan grants that are not built yet.
+   *
+   * Sent separately rather than merged into `features` so a pricing page can
+   * label them honestly instead of advertising them as available. An empty
+   * array is the goal state.
+   */
+  readonly upcomingFeatures: readonly PlanFeature[];
   readonly purchasable: boolean;
   readonly featured: boolean;
 }
