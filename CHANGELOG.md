@@ -62,6 +62,17 @@ deployed together.
 - **White-label branding** on the organization, applied to rendered reports. Stored regardless of
   plan and applied only on a plan that includes it, so a downgrade loses nothing but stops applying.
 
+- **Client management.** Agency clients, with websites assigned to one and a client list that shows
+  website and contact counts. Archiving is reversible and hides a client from the working view;
+  deleting is explicit and keeps the websites, unassigning them rather than destroying history.
+- **The white-label client portal.** A client contact is a normal user whose membership carries the
+  `client` role and a `clientId`. That second scope narrows every tenant-scoped query to one
+  client's websites, so a contact sees their own sites and cannot reach another client's, the
+  agency's team, the audit log, or anything that writes. Every permission the role holds ends in
+  `:read`, and a test asserts that rather than listing them.
+- Portal access reuses the existing invitation flow — same token, same expiry, same acceptance
+  route — with the client carried on the invitation so the recipient cannot choose one.
+
 ### Changed
 
 - The unique partial index that deduplicates open incidents moved from `{ websiteId }` to
@@ -77,6 +88,12 @@ deployed together.
 - The SSRF boundary moved into `src/monitoring/safe-request.ts` and is now shared by the uptime
   checker and every page-fetching monitor. It was duplicated the moment a second fetcher existed,
   and a second implementation of that boundary is a second thing to get wrong.
+- The members list and member-management lookups now exclude client contacts. They are memberships
+  too, but they belong to a client rather than to the agency, and mixing them into the members table
+  would make it a place where somebody could accidentally promote a customer's contact to admin.
+- `canAssignRole` refuses every role when the actor is a client. The rank comparison alone let a
+  client assign their own role — unreachable today, since they hold no invite permission, but this
+  primitive is what a route would be checked against if one ever forgot.
 - `MembershipRepository.countForOrganization` counts accepted members for the team-size limit.
   Pending invitations are deliberately excluded — an invitation nobody accepts would otherwise
   occupy a seat forever.

@@ -14,6 +14,7 @@ import { defaultRateLimit } from './middlewares/rate-limit.middleware.js';
 import { requestId } from './middlewares/request-id.middleware.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
+import { ClientRepository } from './repositories/client.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
 import { MonitorRepository } from './repositories/monitor.repository.js';
 import { ReportRepository } from './repositories/report.repository.js';
@@ -24,6 +25,7 @@ import { WebsiteRepository } from './repositories/website.repository.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
+import { ClientService } from './services/client.service.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
 import { MemberService } from './services/member.service.js';
@@ -117,6 +119,7 @@ export function createApp(): Express {
   const auditLogRepository = new AuditLogRepository();
   const monitorRepository = new MonitorRepository();
   const reportRepository = new ReportRepository();
+  const clientRepository = new ClientRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -124,6 +127,7 @@ export function createApp(): Express {
       websites: websiteRepository,
       memberships: membershipRepository,
       reports: reportRepository,
+      clients: clientRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -139,6 +143,18 @@ export function createApp(): Express {
     checkResultRepository,
     incidentRepository,
     auditService,
+    // One existence query rather than a dependency on client management: the
+    // website service only needs to know whether an id names a client of this
+    // organization before it stores the assignment.
+    (organizationId, clientId) => clientRepository.exists(organizationId, clientId),
+  );
+  const clientService = new ClientService(
+    clientRepository,
+    websiteRepository,
+    membershipRepository,
+    entitlementService,
+    auditService,
+    emailService,
   );
   const monitorService = new MonitorService(websiteRepository, websiteService, auditService);
   const monitorConfigService = new MonitorConfigService(
@@ -166,6 +182,7 @@ export function createApp(): Express {
     organizations: organizationRepository,
     authService,
     auditService,
+    clientService,
     entitlementService,
     organizationService,
     memberService,
@@ -198,6 +215,7 @@ interface UsageRepositories {
   readonly websites: WebsiteRepository;
   readonly memberships: MembershipRepository;
   readonly reports: ReportRepository;
+  readonly clients: ClientRepository;
 }
 
 /**
@@ -210,7 +228,7 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
   return {
     websites: (organizationId) => repositories.websites.countForOrganization(organizationId),
     members: (organizationId) => repositories.memberships.countForOrganization(organizationId),
-    clients: () => Promise.resolve(0),
+    clients: (organizationId) => repositories.clients.countForOrganization(organizationId),
     statusPages: () => Promise.resolve(0),
     apiKeys: () => Promise.resolve(0),
     integrations: () => Promise.resolve(0),

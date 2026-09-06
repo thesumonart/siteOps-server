@@ -13,6 +13,8 @@ import {
   normalizeWebsiteUrl,
 } from '../contracts/index.js';
 import { ApiError } from '../errors/ApiError.js';
+import type { Types } from 'mongoose';
+
 import type { CheckResultRepository } from '../repositories/check-result.repository.js';
 import type { IncidentRepository } from '../repositories/incident.repository.js';
 import type { WebsiteRecord, WebsiteRepository } from '../repositories/website.repository.js';
@@ -58,6 +60,17 @@ export class WebsiteService {
     private readonly checks: CheckResultRepository,
     private readonly incidents: IncidentRepository,
     private readonly audit: AuditService,
+    /**
+     * Resolves a client id within an organization, or null.
+     *
+     * A function rather than the repository, so this service does not depend on
+     * client management to assign a website to one — and so the dependency is
+     * one query rather than a whole module.
+     */
+    private readonly clientExists: (
+      organizationId: Types.ObjectId,
+      clientId: string,
+    ) => Promise<Types.ObjectId | null>,
   ) {}
 
   /**
@@ -76,6 +89,10 @@ export class WebsiteService {
       pageSize: query.pageSize,
       search: query.search,
       status: query.status,
+      // From the membership, never the request. A client contact sees their
+      // own websites and cannot widen this by asking.
+      clientScope: organization.clientScope,
+      clientId: query.clientId,
     });
 
     const pagination = buildOffsetMeta(query.page, query.pageSize, totalItems);
@@ -215,6 +232,14 @@ export class WebsiteService {
     if (input.failureThreshold !== undefined) changes.failureThreshold = input.failureThreshold;
     if (input.recoveryThreshold !== undefined) changes.recoveryThreshold = input.recoveryThreshold;
 
+    if (input.clientId !== undefined) {
+      // Null clears the assignment. A non-null id is checked against this
+      // organization's clients before it is stored, so a website can never be
+      // assigned to another agency's client.
+      changes.clientId =
+        input.clientId === null ? null : await this.resolveClient(organization, input.clientId);
+    }
+
     try {
       const updated = await this.repository.update(organization.objectId, websiteId, changes);
       if (!updated) throw ApiError.notFound('WEBSITE_NOT_FOUND', 'Website not found.');
@@ -283,16 +308,45 @@ export class WebsiteService {
     );
   }
 
-  /** Resolves a website within the tenant, or 404s. Every read starts here. */
+  /**
+   * Resolves a website within the tenant, or 404s. Every read starts here.
+   *
+   * "Within the tenant" means both the organization *and*, for a client
+   * membership, that client. A website belonging to a different client of the
+   * same agency does not resolve, which is the whole of the portal's isolation
+   * guarantee.
+   */
   async requireWebsite(
     organization: OrganizationContext,
     websiteId: string,
   ): Promise<WebsiteRecord> {
-    const website = await this.repository.findById(organization.objectId, websiteId);
+    const website = await this.repository.findById(
+      organization.objectId,
+      websiteId,
+      organization.clientScope,
+    );
     if (!website) {
       throw ApiError.notFound('WEBSITE_NOT_FOUND', 'Website not found.');
     }
     return website;
+  }
+
+  /**
+   * Resolves a client id within this organization.
+   *
+   * Injected rather than imported so the website service does not depend on the
+   * client repository: the check is one existence query, and the caller passes
+   * the resolver in. See the composition root.
+   */
+  private async resolveClient(
+    organization: OrganizationContext,
+    clientId: string,
+  ): Promise<Types.ObjectId> {
+    const resolved = await this.clientExists(organization.objectId, clientId);
+    if (!resolved) {
+      throw ApiError.notFound('CLIENT_NOT_FOUND', 'Client not found.');
+    }
+    return resolved;
   }
 
   /**
@@ -343,6 +397,7 @@ export function toWebsiteDto(website: WebsiteRecord): WebsiteDto {
     lastFailedAt: website.lastFailedAt?.toISOString() ?? null,
     lastResponseTimeMs: website.lastResponseTimeMs,
     lastStatusCode: website.lastStatusCode,
+    clientId: website.clientId?.toHexString() ?? null,
     createdAt: website.createdAt.toISOString(),
     updatedAt: website.updatedAt.toISOString(),
   };

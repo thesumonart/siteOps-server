@@ -13,6 +13,15 @@ export interface OrganizationMemberAttributes {
   organizationId: Types.ObjectId;
   userId: Types.ObjectId;
   role: OrganizationRole;
+  /**
+   * Set only for the `client` role: the client this person may see.
+   *
+   * This is the second half of tenant scoping. `organizationId` decides which
+   * organization's data is reachable; for a client membership, `clientId`
+   * narrows that to one client's websites. A `client` row without it would be a
+   * contact who can see the whole agency, so the service refuses to create one.
+   */
+  clientId: Types.ObjectId | null;
   invitedByUserId: Types.ObjectId | null;
   joinedAt: Date;
   createdAt: Date;
@@ -26,6 +35,7 @@ const organizationMemberSchema = new Schema<OrganizationMemberAttributes>(
     organizationId: { type: Schema.Types.ObjectId, required: true, ref: 'Organization' },
     userId: { type: Schema.Types.ObjectId, required: true, ref: 'User' },
     role: { type: String, required: true, enum: ORGANIZATION_ROLES, default: 'member' },
+    clientId: { type: Schema.Types.ObjectId, ref: 'Client', default: null },
     invitedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     joinedAt: { type: Date, required: true, default: () => new Date() },
   },
@@ -45,6 +55,13 @@ organizationMemberSchema.index({ userId: 1 }, { name: 'member_by_user' });
 organizationMemberSchema.index(
   { organizationId: 1, joinedAt: 1 },
   { name: 'member_org_joined_at' },
+);
+
+// Backs "who has portal access to this client", and the revoke-on-archive
+// sweep. Partial, because only client memberships carry the field at all.
+organizationMemberSchema.index(
+  { clientId: 1 },
+  { name: 'member_by_client', partialFilterExpression: { role: 'client' } },
 );
 
 export const OrganizationMemberModel: Model<OrganizationMemberAttributes> =

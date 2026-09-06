@@ -16,6 +16,7 @@
 
 export * from './audit-log.model.js';
 export * from './check-result.model.js';
+export * from './client.model.js';
 export * from './incident.model.js';
 export * from './monitor-result.model.js';
 export * from './invitation.model.js';

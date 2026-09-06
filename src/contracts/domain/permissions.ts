@@ -26,6 +26,8 @@ export const PERMISSIONS = [
   'notification:read',
   'notification:update',
   'audit_log:read',
+  'client:read',
+  'client:manage',
   'report:read',
   'report:create',
   'report:manage',
@@ -57,6 +59,8 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   'incident:update',
   'member:invite',
   'audit_log:read',
+  'client:read',
+  'client:manage',
   'report:create',
   'report:manage',
 ];
@@ -71,10 +75,31 @@ const OWNER_PERMISSIONS: readonly Permission[] = [
   'billing:manage',
 ];
 
+/**
+ * What a client contact may do in the portal.
+ *
+ * Read-only and deliberately tiny. Note what is *absent*: `member:read` (a
+ * client must not learn who works at the agency), `notification:*`,
+ * `audit_log:read`, and anything that writes. Even within these, every query is
+ * narrowed again by the membership's `clientId`, so "read websites" means "read
+ * this client's websites" and nothing else.
+ *
+ * `organization:read` is present because the portal has to render the
+ * organization's name and branding. That is the whole of what it exposes.
+ */
+const CLIENT_PERMISSIONS: readonly Permission[] = [
+  'organization:read',
+  'website:read',
+  'monitoring:read',
+  'incident:read',
+  'report:read',
+];
+
 export const ROLE_PERMISSIONS: Record<OrganizationRole, readonly Permission[]> = {
   owner: OWNER_PERMISSIONS,
   admin: ADMIN_PERMISSIONS,
   member: MEMBER_PERMISSIONS,
+  client: CLIENT_PERMISSIONS,
 };
 
 export function hasPermission(role: OrganizationRole, permission: Permission): boolean {

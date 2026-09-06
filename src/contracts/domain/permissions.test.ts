@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { hasEveryPermission, hasPermission, permissionsFor, PERMISSIONS } from './permissions.js';
-import { ORGANIZATION_ROLES, canActOn, canAssignRole, outranks, rankOf } from './roles.js';
+import {
+  ORGANIZATION_ROLES,
+  canActOn,
+  canAssignRole,
+  isInternalRole,
+  outranks,
+  rankOf,
+} from './roles.js';
 
 describe('role hierarchy', () => {
   it('ranks owner above admin above member', () => {
@@ -18,6 +25,59 @@ describe('role hierarchy', () => {
   it('lets an owner act on an admin but not the reverse', () => {
     expect(outranks('owner', 'admin')).toBe(true);
     expect(outranks('admin', 'owner')).toBe(false);
+  });
+});
+
+describe('the client role', () => {
+  it('sits below every internal role', () => {
+    // A client contact is an outsider given a window into part of the
+    // organization; they must never be able to act on anyone.
+    expect(rankOf('client')).toBeLessThan(rankOf('member'));
+    expect(canActOn('client', 'member')).toBe(false);
+    expect(canActOn('client', 'admin')).toBe(false);
+    expect(canActOn('client', 'owner')).toBe(false);
+  });
+
+  it('cannot assign any role, including its own', () => {
+    for (const role of ORGANIZATION_ROLES) {
+      expect(canAssignRole('client', role)).toBe(false);
+    }
+  });
+
+  it('is not an internal role', () => {
+    expect(isInternalRole('client')).toBe(false);
+    for (const role of ['owner', 'admin', 'member'] as const) {
+      expect(isInternalRole(role)).toBe(true);
+    }
+  });
+
+  it('holds only read permissions', () => {
+    for (const permission of permissionsFor('client')) {
+      // Every capability a client holds ends in `:read`. Anything else would be
+      // a write from outside the organization.
+      expect(permission.endsWith(':read')).toBe(true);
+    }
+  });
+
+  it('cannot see who works at the agency', () => {
+    // The portal shows a client their own websites, not the agency's team.
+    expect(hasPermission('client', 'member:read')).toBe(false);
+    expect(hasPermission('client', 'audit_log:read')).toBe(false);
+    expect(hasPermission('client', 'notification:read')).toBe(false);
+    expect(hasPermission('client', 'billing:read')).toBe(false);
+    expect(hasPermission('client', 'client:read')).toBe(false);
+  });
+
+  it('can read the websites and incidents the portal renders', () => {
+    expect(
+      hasEveryPermission('client', [
+        'organization:read',
+        'website:read',
+        'monitoring:read',
+        'incident:read',
+        'report:read',
+      ]),
+    ).toBe(true);
   });
 });
 

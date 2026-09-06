@@ -1,6 +1,7 @@
 import { syncAuthIndexes } from './auth-indexes.js';
 import {
   AuditLogModel,
+  ClientModel,
   IncidentModel,
   InvitationModel,
   MonitorResultModel,
@@ -49,6 +50,7 @@ export const MANAGED_MODELS = [
   MonitorResultModel,
   IncidentModel,
   InvitationModel,
+  ClientModel,
   ReportModel,
   ReportScheduleModel,
   NotificationModel,

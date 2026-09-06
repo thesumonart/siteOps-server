@@ -53,8 +53,17 @@ export const updateOrganizationSchema = z.object({
 
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 
-/** Owner is intentionally not assignable through the invite flow — ownership is transferred. */
+/**
+ * Roles the member invite flow may hand out.
+ *
+ * `owner` is excluded because ownership is transferred rather than granted.
+ * `client` is excluded because a client contact is invited from that client's
+ * page, where the invitation carries which client they may see — an invite
+ * without one would create a contact scoped to nothing.
+ */
 export const assignableRoleSchema = z.enum(['admin', 'member']);
+
+export type AssignableRole = z.infer<typeof assignableRoleSchema>;
 
 export const inviteMemberSchema = z.object({
   email: emailSchema,

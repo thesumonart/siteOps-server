@@ -151,6 +151,17 @@ stored rather than recomputed on demand.
 The third lease queue in the product, and the one where a duplicate claim is most costly: it means a
 client receives the same report twice.
 
+### `clients`
+
+An agency's clients. Which websites belong to one lives on the website
+(`website.clientId`), not as a list here — a website has at most one client, and the alternative
+would be two documents to keep in step on every reassignment.
+
+| Index                    | Keys                               | Why                                                                                                                                                                  |
+| ------------------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client_org_name_unique` | `{ organizationId, name }` unique  | Two clients in one organization may not share a name: an agency picking one from a dropdown needs the names to be distinguishable. Serves the alphabetical list too. |
+| `client_org_status_name` | `{ organizationId, status, name }` | Separating active clients from archived ones.                                                                                                                        |
+
 ### `notifications`
 
 | Index                              | Keys                                        | Why                                                                                                                           |

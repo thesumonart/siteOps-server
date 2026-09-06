@@ -18,6 +18,15 @@ export interface InvitationAttributes {
   /** Lowercased at write time so lookups and the unique index agree. */
   email: string;
   role: OrganizationRole;
+  /**
+   * Set only when `role` is `client`: which client the invitee will be able to
+   * see once they accept.
+   *
+   * Carried on the invitation rather than decided at acceptance, because the
+   * person who chose the client is the agency admin sending the invite — not
+   * the recipient, who must not get to pick.
+   */
+  clientId: Types.ObjectId | null;
   status: InvitationStatus;
   /**
    * SHA-256 of the token that was emailed. The token itself is never stored:
@@ -42,6 +51,7 @@ const invitationSchema = new Schema<InvitationAttributes>(
     organizationId: { type: Schema.Types.ObjectId, required: true, ref: 'Organization' },
     email: { type: String, required: true, trim: true, lowercase: true, maxlength: 254 },
     role: { type: String, required: true, enum: ORGANIZATION_ROLES, default: 'member' },
+    clientId: { type: Schema.Types.ObjectId, ref: 'Client', default: null },
     status: { type: String, required: true, enum: INVITATION_STATUSES, default: 'pending' },
     tokenHash: { type: String, required: true, maxlength: 64 },
     invitedByUserId: { type: Schema.Types.ObjectId, required: true, ref: 'User' },

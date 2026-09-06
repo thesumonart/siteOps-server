@@ -15,7 +15,7 @@ import {
   MONITORING_INTERVALS_SECONDS,
 } from '../domain/website.js';
 import { normalizeWebsiteUrl } from '../url/normalize.js';
-import { cursorPaginationQuerySchema, humanNameSchema } from './common.js';
+import { cursorPaginationQuerySchema, humanNameSchema, objectIdSchema } from './common.js';
 
 /**
  * Validates and normalizes a monitored URL in one step, so every layer that
@@ -63,10 +63,20 @@ export const createWebsiteSchema = z.object({
   recoveryThreshold: thresholdSchema.default(DEFAULT_RECOVERY_THRESHOLD),
 });
 
+/**
+ * The client a website belongs to.
+ *
+ * Explicitly nullable rather than merely optional: on an update, `null` clears
+ * the assignment and an absent field leaves it alone, and those are different
+ * intentions that a plain optional cannot express.
+ */
+export const websiteClientSchema = objectIdSchema.nullable();
+
 export type CreateWebsiteInput = z.infer<typeof createWebsiteSchema>;
 
 export const updateWebsiteSchema = createWebsiteSchema.partial().extend({
   monitoringEnabled: z.boolean().optional(),
+  clientId: websiteClientSchema.optional(),
 });
 
 export type UpdateWebsiteInput = z.infer<typeof updateWebsiteSchema>;
@@ -76,6 +86,8 @@ export const listWebsitesQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(120).optional(),
   status: z.enum(['operational', 'degraded', 'down', 'paused', 'unknown']).optional(),
+  /** An agency narrowing its own view. Never widens a client's scope. */
+  clientId: objectIdSchema.optional(),
 });
 
 export type ListWebsitesQuery = z.infer<typeof listWebsitesQuerySchema>;

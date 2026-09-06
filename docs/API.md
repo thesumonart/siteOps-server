@@ -629,6 +629,78 @@ happen.
 
 ---
 
+## Clients
+
+Agency clients, and who from each client may see their websites. Requires the `clients` plan
+feature; portal access additionally requires `client_portal`.
+
+**A client contact holds neither `client:read` nor `client:manage`**, so every route here is a `403`
+for them. That is the point: a client must not be able to enumerate the agency's other customers.
+
+### `GET /api/clients`
+
+Permission: `client:read`. Query: `status`, `search`. `{ "items": ClientDto[] }`, archived last.
+Each row carries `websiteCount` and `contactCount`, both from one grouped aggregation for the whole
+page rather than two queries per row.
+
+### `POST /api/clients`
+
+Permission: `client:manage`. Body: `name`, and optionally `companyName`, `contactName`,
+`contactEmail`, `notes`.
+
+`notes` is internal and is never rendered in the portal.
+
+| Failure                                | Status | Code                |
+| -------------------------------------- | ------ | ------------------- |
+| Name already used in this organization | 409    | `CLIENT_NAME_TAKEN` |
+
+Uniqueness is scoped to the organization, so two agencies may both have a client called Acme.
+
+### `GET /api/clients/:clientId` · `PATCH /api/clients/:clientId`
+
+Permissions: `client:read` / `client:manage`. Setting `status` to `archived` **revokes every portal
+membership for the client** — an agency that archives a client expects the portal to close.
+
+### `DELETE /api/clients/:clientId`
+
+Permission: `client:manage`. Revokes portal access and removes the client record. **The websites
+survive and become unassigned**: deleting a client relationship is not a request to stop monitoring
+their sites.
+
+### `GET /api/clients/:clientId/contacts`
+
+Permission: `client:manage`. `{ "items": ClientContactDto[] }` — accepted contacts and pending
+invitations together, so an agency can see that an invite was sent and not yet accepted.
+
+### `POST /api/clients/:clientId/contacts`
+
+Permission: `client:manage`. Body: `email`. Sends the same invitation the member flow uses, with the
+client carried on the invitation so the recipient cannot choose one. Rate limited to 20 per hour.
+
+| Failure                                      | Status | Code               |
+| -------------------------------------------- | ------ | ------------------ |
+| Address already belongs to this organization | 409    | `ALREADY_A_MEMBER` |
+| Client is archived                           | 409    | `CONFLICT`         |
+
+Refused rather than silently converted: the address may belong to an agency admin, and turning their
+membership into a client-scoped one would lock them out of their own organization.
+
+### `DELETE /api/clients/:clientId/contacts/:contactId`
+
+Permission: `client:manage`. Removes the membership. The lookup filters on the `client` role, so
+this route can never remove a colleague — internal members go through the members routes, which
+enforce the last-owner rule.
+
+### Assigning a website
+
+`PATCH /api/websites/:websiteId` takes `clientId`. An explicit `null` clears the assignment; an
+absent field leaves it alone. An id naming another organization's client is `404` `CLIENT_NOT_FOUND`.
+
+`GET /api/websites?clientId=…` narrows an agency's own list. For a client contact the scope is
+already applied from their membership and this parameter cannot widen it.
+
+---
+
 ## Plan entitlements
 
 ### `GET /api/organizations/:organizationId/entitlements`
@@ -733,6 +805,8 @@ rewrites the field it did not mention.
 | `INSUFFICIENT_ROLE`             | 403            | Role does not carry the permission                   |
 | `CANNOT_REMOVE_LAST_OWNER`      | 409            | An organization must keep an owner                   |
 | `MEMBER_NOT_FOUND`              | 404            | No such member here                                  |
+| `CLIENT_NOT_FOUND`              | 404            | No such client, or not yours                         |
+| `CLIENT_NAME_TAKEN`             | 409            | A client with that name already exists               |
 | `ALREADY_A_MEMBER`              | 409            | Already joined                                       |
 | `WEBSITE_NOT_FOUND`             | 404            | No such website, or not yours                        |
 | `WEBSITE_URL_ALREADY_MONITORED` | 409            | This organization already monitors that URL          |

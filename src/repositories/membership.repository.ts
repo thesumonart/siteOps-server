@@ -23,6 +23,8 @@ export interface InvitationRecord {
   readonly organizationId: Types.ObjectId;
   readonly email: string;
   readonly role: OrganizationRole;
+  /** Set only for a `client` invitation: the client the invitee will see. */
+  readonly clientId?: Types.ObjectId | null;
   readonly invitedByName: string;
   readonly expiresAt: Date;
   readonly createdAt: Date;
@@ -41,8 +43,21 @@ export class MembershipRepository {
    * Profiles live in the auth-owned `user` collection, so they are fetched in a
    * single `$in` query rather than one per member.
    */
+  /**
+   * The organization's own team.
+   *
+   * Client contacts are excluded. They are memberships too, but they belong to
+   * a client rather than to the agency, and they are listed and revoked on that
+   * client's page — mixing them in here would make the members table a place
+   * where somebody could accidentally promote a customer's contact to admin.
+   *
+   * `listContacts` on the client repository is the counterpart.
+   */
   async listMembers(organizationId: Types.ObjectId): Promise<readonly MemberWithUser[]> {
-    const members = await OrganizationMemberModel.find({ organizationId })
+    const members = await OrganizationMemberModel.find({
+      organizationId,
+      role: { $ne: 'client' },
+    })
       .sort({ joinedAt: 1 })
       .lean()
       .exec();
@@ -71,6 +86,13 @@ export class MembershipRepository {
     });
   }
 
+  /**
+   * Resolves a member for management.
+   *
+   * Also excludes client contacts, so the member routes — role change, removal
+   * — can never reach one. Portal access is granted and revoked on the client's
+   * own page, where archiving revokes it too.
+   */
   async findMemberById(
     organizationId: Types.ObjectId,
     memberId: string,
@@ -81,6 +103,7 @@ export class MembershipRepository {
     const member = await OrganizationMemberModel.findOne({
       _id: memberObjectId,
       organizationId,
+      role: { $ne: 'client' },
     })
       .lean()
       .exec();
@@ -160,12 +183,17 @@ export class MembershipRepository {
     readonly organizationId: Types.ObjectId;
     readonly userId: Types.ObjectId;
     readonly role: OrganizationRole;
+    /** Required for a `client` role; ignored for every other. */
+    readonly clientId?: Types.ObjectId | null;
     readonly invitedByUserId: Types.ObjectId | null;
   }): Promise<void> {
     await OrganizationMemberModel.create({
       organizationId: input.organizationId,
       userId: input.userId,
       role: input.role,
+      // Stored only for a client membership. An internal role carrying one
+      // would be a member mysteriously scoped to a subset of the organization.
+      clientId: input.role === 'client' ? (input.clientId ?? null) : null,
       invitedByUserId: input.invitedByUserId,
       joinedAt: new Date(),
     });
@@ -184,6 +212,9 @@ export class MembershipRepository {
       organizationId: invitation.organizationId,
       email: invitation.email,
       role: invitation.role,
+      // Carried so the client portal's contact list can show which pending
+      // invitations belong to which client.
+      clientId: invitation.clientId ?? null,
       invitedByName: invitation.invitedByName,
       expiresAt: invitation.expiresAt,
       createdAt: invitation.createdAt,
@@ -199,6 +230,8 @@ export class MembershipRepository {
     readonly organizationId: Types.ObjectId;
     readonly email: string;
     readonly role: OrganizationRole;
+    /** Set only for a `client` invitation. */
+    readonly clientId?: Types.ObjectId | null;
     readonly tokenHash: string;
     readonly invitedByUserId: Types.ObjectId;
     readonly invitedByName: string;
@@ -209,6 +242,7 @@ export class MembershipRepository {
       {
         $set: {
           role: input.role,
+          clientId: input.clientId ?? null,
           tokenHash: input.tokenHash,
           invitedByUserId: input.invitedByUserId,
           invitedByName: input.invitedByName,
@@ -252,6 +286,7 @@ export class MembershipRepository {
       organizationId: invitation.organizationId,
       email: invitation.email,
       role: invitation.role,
+      clientId: invitation.clientId ?? null,
       invitedByName: invitation.invitedByName,
       invitedByUserId: invitation.invitedByUserId,
       expiresAt: invitation.expiresAt,

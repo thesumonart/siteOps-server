@@ -1,5 +1,6 @@
 import { type AuditAction, type AuditArea } from '../domain/audit.js';
 import { type CheckErrorType, type CheckStatus, type StatsRange } from '../domain/check.js';
+import { type ClientStatus } from '../domain/client.js';
 import {
   type IncidentCategory,
   type IncidentSeverity,
@@ -116,6 +117,8 @@ export interface WebsiteDto {
   readonly lastFailedAt: string | null;
   readonly lastResponseTimeMs: number | null;
   readonly lastStatusCode: number | null;
+  /** The agency client this website belongs to, or null. */
+  readonly clientId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -165,6 +168,37 @@ export interface MonitorSummaryDto {
   readonly failing: number;
   readonly error: number;
   readonly unknown: number;
+}
+
+/** An agency client, with the counts its list row shows. */
+export interface ClientDto {
+  readonly id: string;
+  readonly name: string;
+  readonly companyName: string | null;
+  readonly contactName: string | null;
+  readonly contactEmail: string | null;
+  readonly status: ClientStatus;
+  /** Internal notes. Never returned to a client-role caller. */
+  readonly notes: string | null;
+  readonly websiteCount: number;
+  readonly contactCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Somebody with portal access to a client, or invited to it.
+ *
+ * `id` is a membership id for an accepted contact and an invitation id for a
+ * pending one. The client never sees this list; it is the agency's view of who
+ * it has let in.
+ */
+export interface ClientContactDto {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly status: 'active' | 'invited';
+  readonly joinedAt: string;
 }
 
 export interface WebsiteCheckDto {

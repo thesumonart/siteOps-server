@@ -1,7 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import type { Permission } from '../contracts/index.js';
-import { hasEveryPermission, permissionsFor } from '../contracts/index.js';
+import { hasEveryPermission, isInternalRole, permissionsFor } from '../contracts/index.js';
 import { ApiError } from '../errors/ApiError.js';
 import type { OrganizationRepository } from '../repositories/organization.repository.js';
 import type { OrganizationActor, OrganizationContext } from '../types/common.types.js';
@@ -61,6 +61,18 @@ export function requireOrganization(
           );
         }
 
+        /*
+         * A client membership with no client is a contact who would see the
+         * whole agency. The service that creates one refuses to; this is the
+         * second layer, and it refuses the *request* rather than trusting that
+         * every write path got it right. Treated as "not found" for the same
+         * reason every other tenant failure is: it says nothing about what
+         * exists.
+         */
+        if (!isInternalRole(membership.role) && membership.clientId === null) {
+          throw ApiError.notFound('ORGANIZATION_NOT_FOUND', 'Organization not found.');
+        }
+
         request.organization = {
           id: organization._id.toHexString(),
           objectId: organization._id,
@@ -69,6 +81,8 @@ export function requireOrganization(
           plan: organization.plan,
           role: membership.role,
           permissions: permissionsFor(membership.role),
+          // Null for an internal role, which means the whole organization.
+          clientScope: isInternalRole(membership.role) ? null : membership.clientId,
         };
 
         next();

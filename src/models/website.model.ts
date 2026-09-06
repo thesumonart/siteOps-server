@@ -50,6 +50,17 @@ export interface WebsiteAttributes {
   /** Open incident, if any. Mirrors the incident collection for fast reads. */
   currentIncidentId: Types.ObjectId | null;
 
+  /**
+   * The agency client this website belongs to, or null.
+   *
+   * Held here rather than as a list on the client, because a website has at
+   * most one client and the alternative would mean two documents to keep in
+   * step on every reassignment. It is also what a client membership's own
+   * `clientId` is matched against, which makes this field part of the tenant
+   * boundary rather than a label.
+   */
+  clientId: Types.ObjectId | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -102,6 +113,7 @@ const websiteSchema = new Schema<WebsiteAttributes>(
     lastResponseTimeMs: { type: Number, default: null },
     lastStatusCode: { type: Number, default: null },
     currentIncidentId: { type: Schema.Types.ObjectId, ref: 'Incident', default: null },
+    clientId: { type: Schema.Types.ObjectId, ref: 'Client', default: null },
   },
   { timestamps: true, collection: 'websites' },
 );
@@ -129,6 +141,20 @@ websiteSchema.index(
 
 // Backs the dashboard status counters.
 websiteSchema.index({ organizationId: 1, status: 1 }, { name: 'website_org_status' });
+
+/*
+ * The client portal's only list query, and the agency's "websites for this
+ * client" view.
+ *
+ * `organizationId` leads even though `clientId` is more selective, because
+ * every query is tenant-scoped first and a client id from another organization
+ * must not be able to match anything — the compound key is what makes that
+ * true at the index level rather than only in the application.
+ */
+websiteSchema.index(
+  { organizationId: 1, clientId: 1, createdAt: -1 },
+  { name: 'website_org_client_created_at' },
+);
 
 export const WebsiteModel: Model<WebsiteAttributes> =
   (mongoose.models.Website as Model<WebsiteAttributes> | undefined) ??

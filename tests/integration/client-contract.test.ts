@@ -215,6 +215,9 @@ describe.skipIf(!available)('every endpoint siteOps-client calls', () => {
 
     expect(Object.keys(response.body.data).sort()).toEqual(
       [
+        // The agency client a website belongs to, or null. Part of the wire
+        // shape the dashboard's website detail reads.
+        'clientId',
         'createdAt',
         'failureThreshold',
         'id',

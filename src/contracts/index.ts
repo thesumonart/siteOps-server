@@ -23,6 +23,7 @@ export * from './api/pagination.js';
 
 export * from './domain/audit.js';
 export * from './domain/check.js';
+export * from './domain/client.js';
 export * from './domain/incident.js';
 export * from './domain/monitor.js';
 export * from './domain/notification.js';
@@ -34,6 +35,7 @@ export * from './domain/website.js';
 
 export * from './schemas/audit.js';
 export * from './schemas/auth.js';
+export * from './schemas/client.js';
 export * from './schemas/common.js';
 export * from './schemas/monitor.js';
 export * from './schemas/monitoring.js';

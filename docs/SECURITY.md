@@ -225,3 +225,61 @@ into a response header is how header injection and log forgery start.
 
 This is a private repository. Raise a security concern directly with the maintainer rather than in
 a public issue.
+
+---
+
+## The client portal
+
+An agency's client gets a read-only window into part of that agency's data. This is the only place
+in SiteOps where somebody _outside_ an organization is given a session inside it, so the boundary is
+worth stating in full.
+
+### Portal access is an organization membership
+
+A client contact is a normal user: normal password, normal verified address, normal session. Their
+membership carries the `client` role and a `clientId`.
+
+That is a decision, not an accident. The alternative — a `client_users` collection with its own
+tokens and its own login — would mean two implementations of authentication, and the second one is
+always the one with the hole in it. Here there is one auth path, one session store, and revoking
+access is deleting a membership, which the product already does correctly.
+
+### Two scopes, not one
+
+Every other role is scoped by `organizationId` alone. A client membership is scoped by two things:
+
+|                  | Internal role     | Client role      |
+| ---------------- | ----------------- | ---------------- |
+| `organizationId` | The organization  | The organization |
+| `clientScope`    | null (everything) | One client       |
+
+`clientScope` is resolved by `requireOrganization` from the membership row **read from the
+database**, never from a header, a body or a token claim. Every repository method that can return
+website-scoped data applies it, so "read websites" means "read this client's websites" and a website
+belonging to another client of the same agency does not resolve at all — a 404, not a 403, exactly
+like a cross-tenant request.
+
+A `client` membership with no `clientId` would be a contact scoped to nothing, which must not read
+as "everything". The service refuses to create one and the middleware refuses to _use_ one, so a row
+written by anything other than the API still fails closed.
+
+### What a client cannot reach
+
+`client:read` and `client:manage` are absent from the role, so the client list is a `403` — a client
+cannot enumerate the agency's other customers. So are `member:read` (they cannot learn who works at
+the agency), `audit_log:read`, `notification:*`, `billing:*` and every write capability. Every
+permission a client holds ends in `:read`, and there is a test that asserts exactly that rather than
+listing them.
+
+The members list and member-management lookups exclude client memberships, so the members table
+cannot be used to promote a customer's contact to admin.
+
+### Archiving revokes access
+
+Archiving a client deletes every portal membership for it. An agency that archives a client expects
+the portal to close; expecting them to also remember each contact individually is how a former
+client keeps reading a live dashboard for a year.
+
+Deleting a client revokes access too, but **keeps the websites** and unassigns them. Deleting a
+client relationship is not a request to stop monitoring their sites, and silently deleting the
+monitoring would destroy history the agency may still need.

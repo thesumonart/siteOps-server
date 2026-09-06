@@ -27,6 +27,8 @@ export interface MembershipRecord {
   readonly organizationId: Types.ObjectId;
   readonly userId: Types.ObjectId;
   readonly role: OrganizationRole;
+  /** Set only for a `client` membership: the client this person may see. */
+  readonly clientId: Types.ObjectId | null;
   readonly joinedAt: Date;
 }
 
@@ -62,6 +64,9 @@ export class OrganizationRepository {
       organizationId: member.organizationId,
       userId: member.userId,
       role: member.role,
+      // Nullish rather than strict, because memberships written before client
+      // access existed carry no field at all.
+      clientId: member.clientId ?? null,
       joinedAt: member.joinedAt,
     };
   }
@@ -115,6 +120,7 @@ export class OrganizationRepository {
           organizationId: member.organizationId,
           userId: member.userId,
           role: member.role,
+          clientId: member.clientId ?? null,
           joinedAt: member.joinedAt,
         },
         organization,

@@ -24,6 +24,7 @@ function organization(plan: Plan): OrganizationContext {
     plan,
     role: 'owner',
     permissions: [],
+    clientScope: null,
   };
 }
 

@@ -1,4 +1,4 @@
-import type { Types } from 'mongoose';
+import { Types } from 'mongoose';
 
 import type { WebsiteStatus } from '../contracts/index.js';
 import {
@@ -21,6 +21,10 @@ export interface ListWebsitesFilter {
   readonly pageSize: number;
   readonly search?: string | undefined;
   readonly status?: WebsiteStatus | undefined;
+  /** Narrows to one client's websites. Part of the tenant boundary, not a filter. */
+  readonly clientScope?: Types.ObjectId | null | undefined;
+  /** An agency filtering its own view by client. */
+  readonly clientId?: string | undefined;
 }
 
 export interface ListWebsitesResult {
@@ -50,6 +54,23 @@ export class WebsiteRepository {
   async list(filter: ListWebsitesFilter): Promise<ListWebsitesResult> {
     const query: Record<string, unknown> = { organizationId: filter.organizationId };
 
+    /*
+     * The client scope is applied first and unconditionally. It comes from the
+     * membership the middleware read from the database, not from the request,
+     * and it is the difference between "this organization's websites" and "the
+     * websites this contact is allowed to see". A `clientId` *filter* below is
+     * an agency narrowing its own view and is applied on top — it can never
+     * widen the scope, because both end up in the same `$and`ed query.
+     */
+    if (filter.clientScope) query.clientId = filter.clientScope;
+
+    if (filter.clientId !== undefined) {
+      const clientObjectId = toObjectId(filter.clientId);
+      // An unparseable id matches nothing rather than being ignored, which
+      // would silently return every website instead of none.
+      query.clientId = clientObjectId ?? new Types.ObjectId('000000000000000000000000');
+    }
+
     if (filter.status) {
       query.status = filter.status;
     }
@@ -73,15 +94,21 @@ export class WebsiteRepository {
     return { items, totalItems };
   }
 
-  async findById(organizationId: Types.ObjectId, websiteId: string): Promise<WebsiteRecord | null> {
+  async findById(
+    organizationId: Types.ObjectId,
+    websiteId: string,
+    clientScope?: Types.ObjectId | null,
+  ): Promise<WebsiteRecord | null> {
     const websiteObjectId = toObjectId(websiteId);
     if (!websiteObjectId) return null;
 
-    // The organization is part of the filter, not checked afterwards: a website
-    // in another tenant simply does not resolve.
-    return WebsiteModel.findOne({ _id: websiteObjectId, organizationId })
-      .lean<WebsiteRecord>()
-      .exec();
+    const query: Record<string, unknown> = { _id: websiteObjectId, organizationId };
+    // Both scopes are part of the filter, not checked afterwards: a website in
+    // another tenant — or belonging to another client — simply does not
+    // resolve, which is what makes a 404 the honest answer.
+    if (clientScope) query.clientId = clientScope;
+
+    return WebsiteModel.findOne(query).lean<WebsiteRecord>().exec();
   }
 
   async countForOrganization(organizationId: Types.ObjectId): Promise<number> {
@@ -95,9 +122,15 @@ export class WebsiteRepository {
    * summary card should come from a single read, or they can disagree with
    * each other when a check lands between two queries.
    */
-  async countByStatus(organizationId: Types.ObjectId): Promise<ReadonlyMap<WebsiteStatus, number>> {
+  async countByStatus(
+    organizationId: Types.ObjectId,
+    clientScope?: Types.ObjectId | null,
+  ): Promise<ReadonlyMap<WebsiteStatus, number>> {
+    const match: Record<string, unknown> = { organizationId };
+    if (clientScope) match.clientId = clientScope;
+
     const rows = await WebsiteModel.aggregate<{ _id: WebsiteStatus; count: number }>([
-      { $match: { organizationId } },
+      { $match: match },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]).exec();
 
@@ -151,6 +184,7 @@ export class WebsiteRepository {
         | 'nextCheckAt'
         | 'consecutiveFailures'
         | 'consecutiveSuccesses'
+        | 'clientId'
       >
     >,
   ): Promise<WebsiteRecord | null> {
@@ -213,6 +247,49 @@ export class WebsiteRepository {
    * behind is not merely stale data, it is a document the worker will keep
    * claiming and failing to resolve a website for, forever.
    */
+  /** Every website id belonging to one client, for scoping a bulk read. */
+  async idsForClient(
+    organizationId: Types.ObjectId,
+    clientId: Types.ObjectId,
+  ): Promise<readonly Types.ObjectId[]> {
+    const rows = await WebsiteModel.find({ organizationId, clientId })
+      .select({ _id: 1 })
+      .lean<{ _id: Types.ObjectId }[]>()
+      .exec();
+
+    return rows.map((row) => row._id);
+  }
+
+  /** How many websites one client has, for the client list. */
+  async countByClient(organizationId: Types.ObjectId): Promise<ReadonlyMap<string, number>> {
+    const rows = await WebsiteModel.aggregate<{ _id: Types.ObjectId | null; count: number }>([
+      { $match: { organizationId, clientId: { $ne: null } } },
+      { $group: { _id: '$clientId', count: { $sum: 1 } } },
+    ]).exec();
+
+    return new Map(
+      rows
+        .filter((row): row is { _id: Types.ObjectId; count: number } => row._id !== null)
+        .map((row) => [row._id.toHexString(), row.count]),
+    );
+  }
+
+  /**
+   * Detaches every website from a client.
+   *
+   * Called when a client is deleted. The websites stay — an agency deleting a
+   * client relationship is not asking to stop monitoring their sites — they
+   * simply become unassigned.
+   */
+  async detachClient(organizationId: Types.ObjectId, clientId: Types.ObjectId): Promise<number> {
+    const result = await WebsiteModel.updateMany(
+      { organizationId, clientId },
+      { $set: { clientId: null } },
+    ).exec();
+
+    return result.modifiedCount;
+  }
+
   async deleteMonitorsFor(websiteId: Types.ObjectId): Promise<number> {
     const [monitors] = await Promise.all([
       WebsiteMonitorModel.deleteMany({ websiteId }).exec(),

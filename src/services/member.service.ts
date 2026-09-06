@@ -152,10 +152,21 @@ export class MemberService {
     if (!userObjectId) throw ApiError.unauthenticated();
 
     if (!(await this.members.isMember(invitation.organizationId, userObjectId))) {
+      /*
+       * A client invitation with no client would create a contact scoped to
+       * nothing — which the middleware treats as "not found" rather than "the
+       * whole organization", but is still a broken membership. Refusing here
+       * keeps the bad row from being written at all.
+       */
+      if (invitation.role === 'client' && !invitation.clientId) {
+        throw ApiError.badRequest('INVALID_TOKEN', 'This invitation is no longer valid.');
+      }
+
       await this.members.addMember({
         organizationId: invitation.organizationId,
         userId: userObjectId,
         role: invitation.role,
+        clientId: invitation.clientId ?? null,
         invitedByUserId: invitation.invitedByUserId,
       });
     }
