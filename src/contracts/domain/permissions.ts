@@ -26,6 +26,9 @@ export const PERMISSIONS = [
   'notification:read',
   'notification:update',
   'audit_log:read',
+  'report:read',
+  'report:create',
+  'report:manage',
   'billing:read',
   'billing:manage',
 ] as const;
@@ -40,6 +43,9 @@ const MEMBER_PERMISSIONS: readonly Permission[] = [
   'incident:read',
   'notification:read',
   'notification:update',
+  // Members may read a report but not spend the organization's quota
+  // generating one, and not change what is mailed to a client every month.
+  'report:read',
 ];
 
 const ADMIN_PERMISSIONS: readonly Permission[] = [
@@ -51,6 +57,8 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   'incident:update',
   'member:invite',
   'audit_log:read',
+  'report:create',
+  'report:manage',
 ];
 
 const OWNER_PERMISSIONS: readonly Permission[] = [

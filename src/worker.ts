@@ -6,6 +6,7 @@ import { connectToDatabase, disconnectFromDatabase, pingDatabase } from './datab
 import { EmailService } from './email/email.service.js';
 import { createEmailMonitorNotifier } from './jobs/monitor-notifier.js';
 import { MonitorSchedulerLoop } from './jobs/monitor-scheduler-loop.js';
+import { ReportSchedulerLoop } from './jobs/report-scheduler-loop.js';
 import { SchedulerLoop } from './jobs/scheduler-loop.js';
 import { createPageSpeedProvider } from './monitoring/performance/pagespeed-provider.js';
 import { createSyntheticProvider } from './monitoring/performance/synthetic-provider.js';
@@ -18,6 +19,8 @@ import { createSslRunner } from './monitoring/runners/ssl.runner.js';
 import type { MonitorRunner } from './monitoring/monitor-runner.js';
 import type { MonitorType } from './contracts/index.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
+import { ReportRepository } from './repositories/report.repository.js';
+import { BrandingService } from './services/branding.service.js';
 import { createLogger, logger } from './utils/logger.js';
 
 const log = createLogger('worker');
@@ -57,11 +60,23 @@ const LEASE_DURATION_MS =
 /** Identifies our requests in a monitored site's own access log. */
 const USER_AGENT = 'SiteOpsMonitor/1.0 (+https://siteops.app)';
 
+/**
+ * How long a report generation or schedule claim is held.
+ *
+ * Must outlast the slowest realistic report — a year of checks across two
+ * hundred websites — or a second worker would reclaim one still being built and
+ * generate it twice. Ten minutes is generous against a job measured in seconds,
+ * and the only cost of being generous is how long a genuinely crashed worker's
+ * report waits before another picks it up.
+ */
+const REPORT_LEASE_DURATION_MS = 10 * 60 * 1000;
+
 interface RuntimeState {
   shuttingDown: boolean;
   healthServer: Server | null;
   schedulerLoop: SchedulerLoop | null;
   monitorLoop: MonitorSchedulerLoop | null;
+  reportLoop: ReportSchedulerLoop | null;
 }
 
 const state: RuntimeState = {
@@ -69,6 +84,7 @@ const state: RuntimeState = {
   healthServer: null,
   schedulerLoop: null,
   monitorLoop: null,
+  reportLoop: null,
 };
 
 /**
@@ -139,6 +155,7 @@ function startHealthServer(port: number): Server {
           checks: { database: 'ok' },
           lastTickAt: state.schedulerLoop?.lastTickAt() ?? null,
           lastMonitorTickAt: state.monitorLoop?.lastTickAt() ?? null,
+          lastReportTickAt: state.reportLoop?.lastTickAt() ?? null,
         });
       });
       return;
@@ -207,6 +224,9 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
     }),
     await attempt('worker.monitor_scheduler_stop_failed', async () => {
       await state.monitorLoop?.stop();
+    }),
+    await attempt('worker.report_scheduler_stop_failed', async () => {
+      await state.reportLoop?.stop();
     }),
     await attempt('worker.health_server_close_failed', closeHealthServer),
     await attempt('worker.database_disconnect_failed', disconnectFromDatabase),
@@ -302,10 +322,35 @@ async function bootstrap(): Promise<void> {
   );
   state.monitorLoop = monitorLoop;
 
+  /*
+   * Reports get a third loop rather than sharing either of the others. Their
+   * work is a burst of aggregation against the database with no outbound
+   * network at all, so it competes for different resources — and a monthly
+   * batch for fifty clients must never delay a one-minute uptime check.
+   */
+  const reportLoop = new ReportSchedulerLoop(
+    {
+      pollIntervalMs: env.REPORT_POLL_INTERVAL_SECONDS * 1000,
+      generationBatchSize: env.REPORT_BATCH_SIZE,
+      // Firing several schedules at once means several bursts of email; kept
+      // low so a large monthly batch spreads across ticks instead of arriving
+      // as one spike the provider may rate-limit.
+      scheduleBatchSize: 3,
+      leaseDurationMs: REPORT_LEASE_DURATION_MS,
+    },
+    {
+      reports: new ReportRepository(),
+      branding: new BrandingService(),
+      emailService,
+    },
+  );
+  state.reportLoop = reportLoop;
+
   state.healthServer = startHealthServer(env.WORKER_PORT);
 
   schedulerLoop.start();
   monitorLoop.start();
+  reportLoop.start();
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {

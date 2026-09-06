@@ -16,8 +16,23 @@ export interface EmailContent {
   readonly text: string;
 }
 
+/**
+ * A file sent with a message.
+ *
+ * Held in memory rather than referenced by URL, because the only thing SiteOps
+ * attaches is a report it just rendered and never stored. A link would need a
+ * publicly reachable file, which is precisely the blob storage the reporting
+ * design avoids.
+ */
+export interface EmailAttachment {
+  readonly filename: string;
+  readonly content: Buffer;
+  readonly contentType: string;
+}
+
 export interface EmailMessage extends EmailContent {
   readonly to: string;
+  readonly attachments?: readonly EmailAttachment[];
 }
 
 export interface EmailDeliveryResult {

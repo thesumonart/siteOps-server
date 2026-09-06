@@ -126,6 +126,31 @@ A crawl result carries a list of broken URLs, so these documents are much larger
 `website_checks` row. Both halves are bounded: the list is capped at 100 findings when it is
 written, and the document expires.
 
+### `reports`
+
+One generated report, holding the _facts_ rather than a file. See
+`contracts/domain/report.ts` for why.
+
+| Index                   | Keys                                               | Why                                                                                                                    |
+| ----------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `report_org_created_at` | `{ organizationId, createdAt: -1, _id: -1 }`       | The reports list, keyset-paged.                                                                                        |
+| `report_pending`        | `{ nextAttemptAt }`, partial on pending/generating | The generation queue's claim query. The partial filter keeps finished reports — almost all of them — out of the index. |
+| `report_ttl`            | `{ createdAt: 1 }`, 365 days                       | Retention.                                                                                                             |
+
+Retained for a **year**, not the 90 days raw checks get. A report is a summary somebody may need for
+a client review long after the checks behind it have expired — which is exactly why the facts are
+stored rather than recomputed on demand.
+
+### `report_schedules`
+
+| Index                     | Keys                                        | Why                 |
+| ------------------------- | ------------------------------------------- | ------------------- |
+| `schedule_org_created_at` | `{ organizationId, createdAt: -1 }`         | The schedules list. |
+| `schedule_due`            | `{ nextRunAt }`, partial on `enabled: true` | The claim query.    |
+
+The third lease queue in the product, and the one where a duplicate claim is most costly: it means a
+client receives the same report twice.
+
 ### `notifications`
 
 | Index                              | Keys                                        | Why                                                                                                                           |
@@ -214,6 +239,7 @@ Monitoring data grows fast: one website on a one-minute interval writes 525,600 
 | ----------------------------------- | ---------------------------------- | ---------------------- |
 | `website_checks`                    | `CHECK_RETENTION_DAYS`, default 90 | `check_ttl` TTL index  |
 | `monitor_results`                   | `CHECK_RETENTION_DAYS`, default 90 | `result_ttl` TTL index |
+| `reports`                           | 365 days                           | `report_ttl` TTL index |
 | `audit_logs`                        | 365 days                           | `audit_ttl` TTL index  |
 | `session`, `verification`           | their own `expiresAt`              | TTL index at 0         |
 | `incidents`, `websites`, membership | kept                               | —                      |

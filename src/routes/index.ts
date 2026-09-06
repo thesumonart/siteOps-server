@@ -10,6 +10,7 @@ import type { MonitorConfigService } from '../services/monitor-config.service.js
 import type { MonitorService } from '../services/monitor.service.js';
 import type { NotificationService } from '../services/notification.service.js';
 import type { OrganizationService } from '../services/organization.service.js';
+import type { ReportGenerationService } from '../services/report-generation.service.js';
 import type { ReportService } from '../services/report.service.js';
 import type { WebsiteService } from '../services/website.service.js';
 import { auditRoutes } from './audit.routes.js';
@@ -18,6 +19,7 @@ import { incidentRoutes } from './incident.routes.js';
 import { monitorRoutes } from './monitor.routes.js';
 import { notificationRoutes } from './notification.routes.js';
 import { organizationRoutes } from './organization.routes.js';
+import { reportGenerationRoutes } from './report-generation.routes.js';
 import { reportRoutes } from './report.routes.js';
 import { websiteRoutes } from './website.routes.js';
 
@@ -41,6 +43,7 @@ export interface ApiDependencies {
   readonly monitorConfigService: MonitorConfigService;
   readonly incidentService: IncidentService;
   readonly reportService: ReportService;
+  readonly reportGenerationService: ReportGenerationService;
   readonly notificationService: NotificationService;
 }
 
@@ -52,6 +55,7 @@ export function apiRoutes(dependencies: ApiDependencies): Router {
   router.use(websiteRoutes(dependencies));
   router.use(monitorRoutes(dependencies));
   router.use(reportRoutes(dependencies));
+  router.use(reportGenerationRoutes(dependencies));
   router.use(incidentRoutes(dependencies));
   router.use(notificationRoutes(dependencies));
   router.use(auditRoutes(dependencies));

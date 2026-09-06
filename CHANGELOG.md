@@ -51,6 +51,17 @@ deployed together.
 - **Broken-link crawling**, bounded on pages, depth, links, wall clock, bytes and concurrency, with
   `robots.txt` honoured by default and every fetch behind the shared address guard.
 
+- **Reports.** Uptime, response-time, incident and monitor summaries over a period, generated on the
+  worker and downloadable as PDF, CSV or JSON. A report stores the _facts_; each format is rendered
+  from them on download, so there is no blob storage, a branding change applies retroactively, and a
+  CSV and a PDF of one report cannot disagree. Every number is aggregated from documents the worker
+  actually wrote — an unmeasured website reports null, never 100%.
+- **Scheduled reports**, weekly or monthly, emailed to a list of addresses with the rendered file
+  attached. Each recipient gets its own copy, so a client contact never sees an agency's other
+  clients. Times are UTC throughout.
+- **White-label branding** on the organization, applied to rendered reports. Stored regardless of
+  plan and applied only on a plan that includes it, so a downgrade loses nothing but stops applying.
+
 ### Changed
 
 - The unique partial index that deduplicates open incidents moved from `{ websiteId }` to

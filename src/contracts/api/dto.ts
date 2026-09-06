@@ -20,6 +20,12 @@ import {
   type MonitorType,
 } from '../domain/monitor.js';
 import { type Plan, type PlanFeature, type PlanLimits } from '../domain/plan.js';
+import {
+  type ReportFormat,
+  type ReportStatus,
+  type ReportType,
+  type ScheduleFrequency,
+} from '../domain/report.js';
 import { type OrganizationRole } from '../domain/roles.js';
 import { type Permission } from '../domain/permissions.js';
 import { type WebsiteStatus } from '../domain/website.js';
@@ -255,6 +261,66 @@ export interface AuditLogDto {
 export interface AuditActorDto {
   readonly id: string | null;
   readonly name: string;
+}
+
+/**
+ * A report as it appears in a list or a detail view.
+ *
+ * `summary` carries the handful of numbers a list row shows. The full
+ * `ReportData` is deliberately absent: it can be hundreds of kilobytes, and a
+ * page of fifty rows would be the heaviest response in the product.
+ */
+export interface ReportDto {
+  readonly id: string;
+  readonly type: ReportType;
+  readonly title: string;
+  readonly status: ReportStatus;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly websiteIds: readonly string[];
+  readonly generatedAt: string | null;
+  readonly errorMessage: string | null;
+  /** True when a schedule produced this rather than a person. */
+  readonly scheduled: boolean;
+  readonly createdAt: string;
+  readonly summary: ReportSummaryDto | null;
+}
+
+export interface ReportSummaryDto {
+  readonly websiteCount: number;
+  readonly overallUptimePercentage: number | null;
+  readonly averageResponseTimeMs: number | null;
+  readonly totalIncidents: number;
+  readonly totalDowntimeSeconds: number;
+}
+
+export interface ReportScheduleDto {
+  readonly id: string;
+  readonly name: string;
+  readonly frequency: ScheduleFrequency;
+  readonly dayOfWeek: number;
+  readonly hourUtc: number;
+  readonly type: ReportType;
+  readonly websiteIds: readonly string[];
+  readonly format: ReportFormat;
+  readonly recipients: readonly string[];
+  readonly enabled: boolean;
+  /** Null while disabled: a stored date would promise a run that will not happen. */
+  readonly nextRunAt: string | null;
+  readonly lastRunAt: string | null;
+  readonly lastReportId: string | null;
+  readonly lastError: string | null;
+  readonly createdAt: string;
+}
+
+/** An organization's white-label settings, as stored. */
+export interface BrandingDto {
+  readonly brandName: string | null;
+  readonly logoUrl: string | null;
+  readonly primaryColor: string | null;
+  readonly footerText: string | null;
+  readonly hidePoweredBy: boolean;
+  readonly supportEmail: string | null;
 }
 
 export interface DashboardStatsDto {

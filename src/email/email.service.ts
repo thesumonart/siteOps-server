@@ -31,7 +31,12 @@ export class EmailService {
       // The body is omitted; only the actionable link is printed, and only
       // outside production.
       logger.warn(
-        { to: message.to, subject: message.subject, preview: extractFirstUrl(message.text) },
+        {
+          to: message.to,
+          subject: message.subject,
+          preview: extractFirstUrl(message.text),
+          attachments: message.attachments?.length ?? 0,
+        },
         'email.not_configured',
       );
       return { delivered: false, reason: 'No email provider configured.' };
@@ -44,6 +49,15 @@ export class EmailService {
         subject: message.subject,
         html: message.html,
         text: message.text,
+        ...(message.attachments && message.attachments.length > 0
+          ? {
+              attachments: message.attachments.map((attachment) => ({
+                filename: attachment.filename,
+                content: attachment.content,
+                contentType: attachment.contentType,
+              })),
+            }
+          : {}),
       });
 
       if (response.error) {

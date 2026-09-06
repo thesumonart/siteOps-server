@@ -16,6 +16,7 @@ import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
 import { MonitorRepository } from './repositories/monitor.repository.js';
+import { ReportRepository } from './repositories/report.repository.js';
 import { MembershipRepository } from './repositories/membership.repository.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { OrganizationRepository } from './repositories/organization.repository.js';
@@ -30,6 +31,8 @@ import { MonitorConfigService } from './services/monitor-config.service.js';
 import { MonitorService } from './services/monitor.service.js';
 import { NotificationService } from './services/notification.service.js';
 import { OrganizationService } from './services/organization.service.js';
+import { BrandingService } from './services/branding.service.js';
+import { ReportGenerationService } from './services/report-generation.service.js';
 import { ReportService } from './services/report.service.js';
 import { WebsiteService } from './services/website.service.js';
 import { asyncHandler } from './utils/async-handler.js';
@@ -113,12 +116,14 @@ export function createApp(): Express {
   const notificationRepository = new NotificationRepository();
   const auditLogRepository = new AuditLogRepository();
   const monitorRepository = new MonitorRepository();
+  const reportRepository = new ReportRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
     buildUsageCounters({
       websites: websiteRepository,
       memberships: membershipRepository,
+      reports: reportRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -149,6 +154,13 @@ export function createApp(): Express {
     websiteRepository,
   );
   const notificationService = new NotificationService(notificationRepository);
+  const brandingService = new BrandingService();
+  const reportGenerationService = new ReportGenerationService(
+    reportRepository,
+    entitlementService,
+    brandingService,
+    auditService,
+  );
 
   const dependencies: ApiDependencies = {
     organizations: organizationRepository,
@@ -162,6 +174,7 @@ export function createApp(): Express {
     monitorConfigService,
     incidentService,
     reportService,
+    reportGenerationService,
     notificationService,
   };
 
@@ -184,6 +197,7 @@ export function createApp(): Express {
 interface UsageRepositories {
   readonly websites: WebsiteRepository;
   readonly memberships: MembershipRepository;
+  readonly reports: ReportRepository;
 }
 
 /**
@@ -200,7 +214,8 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
     statusPages: () => Promise.resolve(0),
     apiKeys: () => Promise.resolve(0),
     integrations: () => Promise.resolve(0),
-    reportSchedules: () => Promise.resolve(0),
+    reportSchedules: (organizationId) =>
+      repositories.reports.countSchedulesForOrganization(organizationId),
     customDomains: () => Promise.resolve(0),
     apiRequestsToday: () => Promise.resolve(0),
     aiGenerationsThisMonth: () => Promise.resolve(0),

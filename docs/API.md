@@ -531,6 +531,104 @@ and status, for the overview cards.
 
 ---
 
+## Reports
+
+A report is **a stored set of facts, not a stored file**. Generating one runs the aggregations once
+and writes the numbers; the PDF, CSV or JSON is rendered from those numbers on download. There is no
+blob storage to provision, a branding change applies retroactively to every past report, and a CSV
+and a PDF of one report cannot disagree.
+
+Requires the `reports` plan feature. Three capabilities: `report:read` (every role), `report:create`
+(admins and owners — generating one spends quota and loads the database), `report:manage`
+(schedules, which decide what is mailed to a client every month).
+
+### `POST /api/reports`
+
+Permission: `report:create`. **Queues** a report and returns it as `pending`. The worker builds it;
+a month of checks across fifty websites is not something to aggregate while an HTTP connection
+waits.
+
+```json
+{ "type": "organization", "period": "last_month" }
+```
+
+`period` is one of `last_7_days`, `last_30_days`, `last_month`, `last_quarter`, `custom`.
+`last_month` and `last_quarter` are **calendar** periods — a monthly report generated on the 1st
+covers the month that just ended, not the previous thirty days.
+
+A named period must not carry `from`/`to`, and `custom` requires both and is capped at 366 days. An
+open-ended range would let one request aggregate an organization's entire check history.
+
+Rate limited to 30 per hour.
+
+### `GET /api/reports`
+
+Permission: `report:read`. Query: `cursor`, `pageSize`, `status`, `type`. Cursor-paginated
+`ReportDto`, newest first. `summary` carries the handful of figures a row shows; the full payload is
+deliberately absent, because a page of fifty would be the heaviest response in the API.
+
+### `GET /api/reports/:reportId`
+
+Permission: `report:read`. `404` `REPORT_NOT_FOUND`.
+
+### `GET /api/reports/:reportId/download?format=pdf|csv|json`
+
+Permission: `report:read`. **The one route that does not return the standard envelope** — a browser
+downloading a PDF needs bytes and a `Content-Disposition`, not JSON wrapping base64. Every failure
+path still returns the envelope.
+
+Sent as `attachment` with a filename derived from the title with everything outside `[a-z0-9-]`
+replaced: the title is user input and lands in a response header. `Cache-Control: private, no-store`,
+because a report is a snapshot and a cached copy would silently be the wrong one after a
+regeneration.
+
+| Failure                     | Status | Code               |
+| --------------------------- | ------ | ------------------ |
+| Still generating, or failed | 409    | `REPORT_NOT_READY` |
+
+A half-built report is refused rather than rendered as a document full of zeroes — exactly the kind
+of plausible-looking wrong number that must never leave this product.
+
+The CSV carries **every** website where the PDF caps its table at a hundred rows, and every field is
+guarded against spreadsheet formula injection: a website named `=HYPERLINK(...)` is prefixed so it
+renders as text rather than becoming a live link in the recipient's spreadsheet.
+
+### `DELETE /api/reports/:reportId`
+
+Permission: `report:manage`. `204`.
+
+### `GET /api/reports/schedules` · `POST /api/reports/schedules`
+
+Permission: `report:manage`. Requires the `scheduled_reports` feature.
+
+```json
+{
+  "name": "Monthly client report",
+  "frequency": "monthly",
+  "hourUtc": 8,
+  "type": "organization",
+  "format": "pdf",
+  "recipients": ["client@example.com"]
+}
+```
+
+`hourUtc` is UTC and named so: a scheduler that quietly interprets `8` in the server's local zone
+sends at a different time depending on where it is deployed. A weekly schedule also takes
+`dayOfWeek` (0 = Sunday); a monthly one always runs on the 1st, which is what makes `last_month`
+resolve to the month that just ended.
+
+Each recipient receives its own copy, so a client contact never learns the addresses of an agency's
+other clients, and one rejected address does not stop the rest.
+
+### `PATCH /api/reports/schedules/:scheduleId` · `DELETE /api/reports/schedules/:scheduleId`
+
+Permission: `report:manage`. Changing the frequency, day or hour recomputes the next run; without
+that, moving a Monday-09:00 report to Friday would still fire once at the already-scheduled Monday
+time. `nextRunAt` is null while a schedule is disabled rather than showing a date that will not
+happen.
+
+---
+
 ## Plan entitlements
 
 ### `GET /api/organizations/:organizationId/entitlements`
@@ -645,6 +743,9 @@ rewrites the field it did not mention.
 | `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                       |
 | `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                           |
 | `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                 |
+| `REPORT_NOT_FOUND`              | 404            | No such report, or not yours                         |
+| `REPORT_NOT_READY`              | 409            | Report is still generating, or failed                |
+| `REPORT_SCHEDULE_NOT_FOUND`     | 404            | No such schedule, or not yours                       |
 | `PLAN_LIMIT_REACHED`            | 403            | The organization's plan does not allow it            |
 
 The full list lives in `src/contracts/api/errors.ts` and is mirrored by the dashboard.

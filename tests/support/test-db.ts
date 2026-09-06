@@ -9,6 +9,8 @@ import {
   NotificationSettingsModel,
   OrganizationMemberModel,
   OrganizationModel,
+  ReportModel,
+  ReportScheduleModel,
   UserModel,
   WebsiteCheckModel,
   WebsiteModel,
@@ -45,6 +47,8 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => NotificationModel.syncIndexes(),
   () => NotificationSettingsModel.syncIndexes(),
   () => InvitationModel.syncIndexes(),
+  () => ReportModel.syncIndexes(),
+  () => ReportScheduleModel.syncIndexes(),
   () => AuditLogModel.syncIndexes(),
 ];
 
@@ -60,6 +64,8 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => NotificationModel.deleteMany({}).exec(),
   () => NotificationSettingsModel.deleteMany({}).exec(),
   () => InvitationModel.deleteMany({}).exec(),
+  () => ReportModel.deleteMany({}).exec(),
+  () => ReportScheduleModel.deleteMany({}).exec(),
   () => AuditLogModel.deleteMany({}).exec(),
 ];
 

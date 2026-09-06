@@ -85,6 +85,11 @@ export const envSchema = z
      */
     CHECK_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(90),
 
+    /** How often the worker looks for queued reports and due schedules. */
+    REPORT_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
+    /** Reports built per tick. Each is a burst of aggregation, not a network call. */
+    REPORT_BATCH_SIZE: z.coerce.number().int().min(1).max(20).default(3),
+
     /**
      * Google PageSpeed Insights API key.
      *
