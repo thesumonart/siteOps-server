@@ -247,11 +247,14 @@ export class WebsiteService {
       throw ApiError.notFound('WEBSITE_NOT_FOUND', 'Website not found.');
     }
 
-    // Incidents are few and are removed with the website. Checks can number in
-    // the hundreds of thousands, so they are cleaned up without blocking the
-    // response — they are unreachable once the website is gone (every query
-    // scopes by websiteId) and expire on their own via the TTL index.
+    // Incidents and monitors are few and are removed with the website. A
+    // monitor especially must not survive: it is a queue document the worker
+    // would go on claiming for a website that no longer exists.
     await this.repository.deleteIncidentsFor(deleted._id);
+    await this.repository.deleteMonitorsFor(deleted._id);
+    // Checks can number in the hundreds of thousands, so they are cleaned up
+    // without blocking the response — they are unreachable once the website is
+    // gone (every query scopes by websiteId) and expire via the TTL index.
     void this.repository
       .deleteChecksFor(deleted._id)
       .then((count) => {

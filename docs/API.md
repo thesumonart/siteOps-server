@@ -464,6 +464,73 @@ outage over, not that the site is back.
 
 ---
 
+## Monitors
+
+The six auxiliary checks: `ssl`, `domain`, `performance`, `content`, `seo`, `links`. Addressed by
+`(websiteId, type)` rather than by id — a monitor is a property of the website, and whether a
+document has been written for one yet is storage detail.
+
+Each type needs its own plan feature (`ssl_monitoring`, `domain_monitoring`, …) **in addition to**
+the permission. Turning one _off_ is always allowed regardless of plan: someone who downgrades with
+a monitor already on must not be trapped with it.
+
+### `GET /api/websites/:websiteId/monitors`
+
+Permission: `monitoring:read`. `{ "items": MonitorDto[] }` — always six entries, one per type. A
+type that has never been configured is returned disabled with its defaults, so the settings panel
+renders every row without knowing which exist.
+
+### `PATCH /api/websites/:websiteId/monitors/:type`
+
+Permission: `monitoring:toggle` — the same capability as pausing uptime checks, because silencing a
+certificate warning is the same kind of act. Body: `enabled`, `intervalSeconds` and `config`, all
+optional. Creates the monitor on first write.
+
+`config` is a discriminated union on `type` and must match the path, or the request is a `400` with
+a field error. Enabling a monitor makes it due immediately, so the first result appears within a
+poll interval rather than after a full day.
+
+| Failure                               | Status | Code                 |
+| ------------------------------------- | ------ | -------------------- |
+| Plan does not include this monitor    | 403    | `PLAN_LIMIT_REACHED` |
+| Interval faster than the plan's floor | 403    | `PLAN_LIMIT_REACHED` |
+| Config belongs to another type        | 400    | `VALIDATION_ERROR`   |
+
+A `links` crawl asking for more pages than the plan allows is **clamped, not refused** — running the
+crawl the customer is entitled to is better service than rejecting the request over a number they
+cannot see.
+
+### `POST /api/websites/:websiteId/monitors/:type/run`
+
+Permission: `monitoring:toggle`. Marks the monitor due now and returns. **The check itself happens
+on the worker**: a Lighthouse run or a site crawl inside a request handler would hold an HTTP
+connection open for minutes and put the API's event loop under load meant for a background process.
+The client polls for the result.
+
+Rate limited to 20 per hour per client, well below the general allowance. This is the one route
+that lets a signed-in user aim work at a third party's server on demand.
+
+| Failure                | Status | Code                |
+| ---------------------- | ------ | ------------------- |
+| Monitor not configured | 404    | `MONITOR_NOT_FOUND` |
+| Monitor is turned off  | 409    | `MONITOR_DISABLED`  |
+
+### `GET /api/monitors/:monitorId/results`
+
+Permission: `monitoring:read`. Query: `cursor`, `pageSize`, `status`. Cursor-paginated
+`MonitorResultDto`, newest first.
+
+`status` is one of `passing`, `warning`, `failing`, `error`, `unknown`. **`error` is not
+`failing`**: it means the monitor could not reach an answer, not that the answer was bad. An
+errored run never opens or resolves an incident.
+
+### `GET /api/monitors/summary`
+
+Permission: `monitoring:read`. `{ "items": MonitorSummaryDto[] }` — enabled monitors grouped by type
+and status, for the overview cards.
+
+---
+
 ## Plan entitlements
 
 ### `GET /api/organizations/:organizationId/entitlements`
@@ -573,6 +640,8 @@ rewrites the field it did not mention.
 | `WEBSITE_URL_ALREADY_MONITORED` | 409            | This organization already monitors that URL          |
 | `INVALID_WEBSITE_URL`           | 400            | URL is malformed or unsupported                      |
 | `BLOCKED_WEBSITE_URL`           | 400            | URL points at an address that must not be reached    |
+| `MONITOR_NOT_FOUND`             | 404            | Monitor is not configured for that website           |
+| `MONITOR_DISABLED`              | 409            | Monitor must be on before it can be run              |
 | `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                       |
 | `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                           |
 | `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                 |

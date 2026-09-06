@@ -15,6 +15,7 @@ import { requestId } from './middlewares/request-id.middleware.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
+import { MonitorRepository } from './repositories/monitor.repository.js';
 import { MembershipRepository } from './repositories/membership.repository.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { OrganizationRepository } from './repositories/organization.repository.js';
@@ -25,6 +26,7 @@ import { AuthService } from './services/auth.service.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
 import { MemberService } from './services/member.service.js';
+import { MonitorConfigService } from './services/monitor-config.service.js';
 import { MonitorService } from './services/monitor.service.js';
 import { NotificationService } from './services/notification.service.js';
 import { OrganizationService } from './services/organization.service.js';
@@ -110,6 +112,7 @@ export function createApp(): Express {
   const incidentRepository = new IncidentRepository();
   const notificationRepository = new NotificationRepository();
   const auditLogRepository = new AuditLogRepository();
+  const monitorRepository = new MonitorRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -133,6 +136,12 @@ export function createApp(): Express {
     auditService,
   );
   const monitorService = new MonitorService(websiteRepository, websiteService, auditService);
+  const monitorConfigService = new MonitorConfigService(
+    monitorRepository,
+    websiteService,
+    entitlementService,
+    auditService,
+  );
   const incidentService = new IncidentService(incidentRepository, websiteRepository, auditService);
   const reportService = new ReportService(
     checkResultRepository,
@@ -150,6 +159,7 @@ export function createApp(): Express {
     memberService,
     websiteService,
     monitorService,
+    monitorConfigService,
     incidentService,
     reportService,
     notificationService,

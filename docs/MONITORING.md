@@ -258,3 +258,115 @@ poll interval is alive but not working.
 Shutdown stops claiming new work, waits for checks already in flight, then closes the health server
 and drains the pool. A 25-second watchdog forces an exit if a handle fails to release, so it is
 this process — not the platform's SIGKILL — that records why.
+
+---
+
+## Auxiliary monitors
+
+Uptime is one loop. Six other checks run alongside it — SSL, domain expiry, performance, content
+change, SEO health and broken links — and they are deliberately a separate mechanism.
+
+### Why they are separate
+
+They differ from uptime in every dimension that matters to a scheduler:
+
+|                  | Uptime           | Auxiliary                    |
+| ---------------- | ---------------- | ---------------------------- |
+| Cadence          | 1–60 minutes     | 1 hour – 30 days             |
+| Cost per run     | One HTTP request | Up to a full site crawl      |
+| What it measures | Reachability now | State that changes over days |
+| Queue document   | `websites`       | `website_monitors`           |
+
+Sharing one queue would mean either throttling uptime to a crawl's pace or letting crawls run at
+uptime's concurrency. Sharing one lease would let a seven-minute crawl hold up a two-second
+certificate check on the same site.
+
+### The queue
+
+`website_monitors` holds one document per `(website, type)`. It is the same lease pattern as the
+uptime queue and for the same reasons: `nextRunAt` is the ready time, `leaseExpiresAt` is the
+visibility timeout, one atomic `findOneAndUpdate` claims a document, and an expired lease is
+reclaimable so a crashed worker strands nothing.
+
+`MonitorSchedulerLoop` runs in the same worker process as the uptime loop but on its own timer.
+Within a tick it processes **one type at a time, sequentially**, each with its own concurrency
+budget and timeout:
+
+| Type          | Concurrency | Timeout |
+| ------------- | ----------- | ------- |
+| `ssl`         | 10          | 15 s    |
+| `domain`      | 3           | 20 s    |
+| `performance` | 2           | 90 s    |
+| `content`     | 5           | 30 s    |
+| `seo`         | 4           | 45 s    |
+| `links`       | 1           | 300 s   |
+
+Sequential across types is the important part: running them concurrently would let a batch of
+crawls and a batch of performance runs start together and put the worker well past what either
+budget allowed alone. The cost is that a tick takes as long as the slowest type, which is invisible
+against a daily check.
+
+A **paused website pauses everything about it**. Someone who silences alerts for a site being
+rebuilt does not expect a certificate warning from it the next morning, and no result is recorded
+either — a gap in the history is honest about the fact that nothing was measured.
+
+### `error` is not `failing`
+
+This distinction runs through the whole subsystem and is the single most important rule in it.
+
+- `failing` — the monitor ran and the answer was bad. A certificate has expired.
+- `error` — the monitor could not get an answer. A registry timed out.
+
+An `error` result **never** opens an incident and **never** resolves one. Resolving on an error
+would send a recovery notification for a problem that has not gone away; opening one would page
+somebody about an expiry that may not exist. An errored run also leaves the monitor's displayed
+status alone until three consecutive failures, because flipping a green check to red over one DNS
+blip teaches people to ignore the colour.
+
+### Incidents
+
+Monitor incidents use the same unique partial index as uptime, keyed on `(websiteId, category)`, so
+an SSL incident and an outage can be open at once while two of either cannot.
+
+Unlike uptime, there is no consecutive-failure threshold. A certificate that expires in four days
+expires in four days on every run, and checking three times before saying so only delays the alert.
+One bad result opens; one good result closes.
+
+### SSL
+
+`ssl-checker.ts` performs the TLS handshake directly rather than through the HTTP checker, because
+an invalid certificate is exactly what this monitor exists to report and an HTTP client refuses the
+connection before anything can be read off it.
+
+The handshake uses `rejectUnauthorized: false`. **This is not a weakening of SSRF protection or of
+transport security**, and the reasoning is worth stating plainly:
+
+- Nothing is transferred. No request is sent, no body is read, no data crosses the socket. It is
+  opened, the peer certificate is copied out, and it is destroyed.
+- `socket.authorized` and `socket.authorizationError` still report, truthfully, whether a browser
+  would have accepted the chain — which is the answer the monitor needs.
+- The address guard runs **before** the handshake. The hostname is resolved, every address goes
+  through the same `checkAddress` used by the HTTP checker, and the socket connects to the approved
+  IP with SNI carrying the hostname. Connecting by hostname would re-query DNS inside the TLS layer
+  and reopen the rebinding window.
+
+Hostname matching follows RFC 6125: a wildcard covers exactly one label and never the apex, and the
+subject common name is consulted only when the certificate carries no SANs at all.
+
+### Domain expiry
+
+Behind a provider interface, because no single source covers every TLD.
+
+1. **RDAP** first — structured JSON, mandatory for gTLDs, unambiguous dates. The default endpoint is
+   IANA's `rdap.org` bootstrap redirector, which is configurable.
+2. **WHOIS** second — port 43, free text, heuristics. IANA is queried for the TLD's authoritative
+   server, then that server for the domain.
+
+A date the parser does not recognise becomes `null`, never a guess: a misparsed date could read
+years into the future and silence a real warning. An ambiguous `04/03/2030` is refused for the same
+reason.
+
+**No public suffix list is bundled.** The registrable domain is found by walking the labels from
+`example.com` outwards and taking the first name a registry recognises — `co.uk` answers "not
+found" and `example.co.uk` answers with a record, so the registry itself is the authority. That is
+one request in the common case, three at most, and nothing to keep up to date.

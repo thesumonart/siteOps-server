@@ -3,8 +3,10 @@ import type { Types } from 'mongoose';
 import type { WebsiteStatus } from '../contracts/index.js';
 import {
   IncidentModel,
+  MonitorResultModel,
   WebsiteCheckModel,
   WebsiteModel,
+  WebsiteMonitorModel,
   type WebsiteAttributes,
 } from '../models/index.js';
 import { toObjectId } from '../utils/object-id.js';
@@ -202,5 +204,20 @@ export class WebsiteRepository {
   async deleteChecksFor(websiteId: Types.ObjectId): Promise<number> {
     const result = await WebsiteCheckModel.deleteMany({ websiteId }).exec();
     return result.deletedCount;
+  }
+
+  /**
+   * Removes the auxiliary monitors and their results.
+   *
+   * Done with the incidents rather than in the background: a monitor left
+   * behind is not merely stale data, it is a document the worker will keep
+   * claiming and failing to resolve a website for, forever.
+   */
+  async deleteMonitorsFor(websiteId: Types.ObjectId): Promise<number> {
+    const [monitors] = await Promise.all([
+      WebsiteMonitorModel.deleteMany({ websiteId }).exec(),
+      MonitorResultModel.deleteMany({ websiteId }).exec(),
+    ]);
+    return monitors.deletedCount;
   }
 }

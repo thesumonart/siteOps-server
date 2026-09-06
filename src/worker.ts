@@ -4,7 +4,13 @@ import { env } from './config/env.js';
 import { MAX_REQUEST_TIMEOUT_MS } from './contracts/index.js';
 import { connectToDatabase, disconnectFromDatabase, pingDatabase } from './database/connection.js';
 import { EmailService } from './email/email.service.js';
+import { createEmailMonitorNotifier } from './jobs/monitor-notifier.js';
+import { MonitorSchedulerLoop } from './jobs/monitor-scheduler-loop.js';
 import { SchedulerLoop } from './jobs/scheduler-loop.js';
+import { createDomainRunner } from './monitoring/runners/domain.runner.js';
+import { createSslRunner } from './monitoring/runners/ssl.runner.js';
+import type { MonitorRunner } from './monitoring/monitor-runner.js';
+import type { MonitorType } from './contracts/index.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { createLogger, logger } from './utils/logger.js';
 
@@ -49,9 +55,27 @@ interface RuntimeState {
   shuttingDown: boolean;
   healthServer: Server | null;
   schedulerLoop: SchedulerLoop | null;
+  monitorLoop: MonitorSchedulerLoop | null;
 }
 
-const state: RuntimeState = { shuttingDown: false, healthServer: null, schedulerLoop: null };
+const state: RuntimeState = {
+  shuttingDown: false,
+  healthServer: null,
+  schedulerLoop: null,
+  monitorLoop: null,
+};
+
+/**
+ * Every auxiliary monitor this worker can run.
+ *
+ * A type with no entry is simply never run — the job logs it and moves on — so
+ * a monitor can be shipped as a contract and a UI before its runner exists
+ * without the worker crashing on it.
+ */
+function buildRunners(): ReadonlyMap<MonitorType, MonitorRunner> {
+  const runners: MonitorRunner[] = [createSslRunner(), createDomainRunner()];
+  return new Map(runners.map((runner) => [runner.type, runner]));
+}
 
 /**
  * Minimal HTTP surface for platform probes.
@@ -90,6 +114,7 @@ function startHealthServer(port: number): Server {
           status: 'ready',
           checks: { database: 'ok' },
           lastTickAt: state.schedulerLoop?.lastTickAt() ?? null,
+          lastMonitorTickAt: state.monitorLoop?.lastTickAt() ?? null,
         });
       });
       return;
@@ -155,6 +180,9 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
     // since that lives in a `finally` block inside `monitoring.job.ts`.
     await attempt('worker.scheduler_stop_failed', async () => {
       await state.schedulerLoop?.stop();
+    }),
+    await attempt('worker.monitor_scheduler_stop_failed', async () => {
+      await state.monitorLoop?.stop();
     }),
     await attempt('worker.health_server_close_failed', closeHealthServer),
     await attempt('worker.database_disconnect_failed', disconnectFromDatabase),
@@ -227,9 +255,33 @@ async function bootstrap(): Promise<void> {
     { emailService, notifications },
   );
   state.schedulerLoop = schedulerLoop;
+
+  /*
+   * The auxiliary monitors get their own loop rather than sharing the uptime
+   * one. Their cadence is hours where uptime's is minutes, their runs cost
+   * orders of magnitude more, and a five-minute crawl must never be able to
+   * delay a one-minute uptime check. Two loops in one process keeps them
+   * independent while still sharing the connection pool and the shutdown path.
+   */
+  const monitorLoop = new MonitorSchedulerLoop(
+    {
+      pollIntervalMs: env.MONITOR_POLL_INTERVAL_SECONDS * 1000,
+      job: {
+        allowLoopback: env.MONITOR_ALLOW_PRIVATE_ADDRESSES,
+        userAgent: USER_AGENT,
+      },
+    },
+    {
+      runners: buildRunners(),
+      notifier: createEmailMonitorNotifier(emailService, notifications),
+    },
+  );
+  state.monitorLoop = monitorLoop;
+
   state.healthServer = startHealthServer(env.WORKER_PORT);
 
   schedulerLoop.start();
+  monitorLoop.start();
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {

@@ -1,7 +1,11 @@
 import type { Types } from 'mongoose';
 
-import type { NotificationEvent, NotificationPreferences } from '../contracts/index.js';
-import { DEFAULT_NOTIFICATION_PREFERENCES } from '../contracts/index.js';
+import type {
+  NotificationEvent,
+  NotificationPreferences,
+  PreferenceField,
+} from '../contracts/index.js';
+import { DEFAULT_NOTIFICATION_PREFERENCES, PREFERENCE_FIELDS } from '../contracts/index.js';
 import {
   NotificationModel,
   NotificationSettingsModel,
@@ -20,15 +24,31 @@ export interface NotificationRecord extends NotificationAttributes {
   readonly _id: Types.ObjectId;
 }
 
-export interface StoredPreferences {
+export type StoredPreferences = NotificationPreferences & {
   readonly userId: Types.ObjectId;
-  readonly websiteDown: boolean;
-  readonly websiteRecovered: boolean;
+};
+
+/**
+ * Projection covering every preference field.
+ *
+ * Built from the contract's list rather than written out, so a new preference
+ * cannot be added to the schema and silently left out of every read — which
+ * would make it read as `undefined` and fall back to the default forever.
+ */
+const PREFERENCE_PROJECTION: Record<string, 1> = Object.fromEntries(
+  PREFERENCE_FIELDS.map((field) => [field, 1]),
+);
+
+/** Picks the preference fields out of a stored document, filling any gaps. */
+function toPreferences(stored: Partial<NotificationPreferences>): NotificationPreferences {
+  const preferences: Record<string, boolean> = {};
+  for (const field of PREFERENCE_FIELDS) {
+    // A document written before this preference existed has no value for it,
+    // and the default is the honest answer for "never asked".
+    preferences[field] = stored[field] ?? DEFAULT_NOTIFICATION_PREFERENCES[field];
+  }
+  return preferences as unknown as NotificationPreferences;
 }
-
-export type PreferenceField = keyof NotificationPreferences;
-
-export const PREFERENCE_FIELDS: readonly PreferenceField[] = ['websiteDown', 'websiteRecovered'];
 
 /** MongoDB's duplicate-key error number. */
 const DUPLICATE_KEY = 11000;
@@ -54,8 +74,10 @@ export class NotificationRepository {
     readonly organizationId: Types.ObjectId;
     readonly userId: Types.ObjectId;
     readonly event: NotificationEvent;
-    readonly websiteId: Types.ObjectId;
-    readonly incidentId: Types.ObjectId;
+    // Nullable because not every notification is about a website or an
+    // incident: a scheduled report is about neither.
+    readonly websiteId: Types.ObjectId | null;
+    readonly incidentId: Types.ObjectId | null;
     readonly title: string;
     readonly body: string;
     readonly dedupeKey: string;
@@ -125,11 +147,16 @@ export class NotificationRepository {
       organizationId,
       userId: { $in: userIds },
     })
-      .select({ userId: 1, websiteDown: 1, websiteRecovered: 1 })
-      .lean<StoredPreferences[]>()
+      .select({ userId: 1, ...PREFERENCE_PROJECTION })
+      .lean<(Partial<NotificationPreferences> & { userId: Types.ObjectId })[]>()
       .exec();
 
-    return new Map(rows.map((row) => [row.userId.toHexString(), row]));
+    return new Map(
+      rows.map((row) => [
+        row.userId.toHexString(),
+        { userId: row.userId, ...toPreferences(row) } satisfies StoredPreferences,
+      ]),
+    );
   }
 
   async findPreferences(
@@ -137,13 +164,11 @@ export class NotificationRepository {
     userId: Types.ObjectId,
   ): Promise<NotificationPreferences | null> {
     const stored = await NotificationSettingsModel.findOne({ organizationId, userId })
-      .select({ websiteDown: 1, websiteRecovered: 1 })
-      .lean<{ websiteDown: boolean; websiteRecovered: boolean }>()
+      .select(PREFERENCE_PROJECTION)
+      .lean<Partial<NotificationPreferences>>()
       .exec();
 
-    return stored
-      ? { websiteDown: stored.websiteDown, websiteRecovered: stored.websiteRecovered }
-      : null;
+    return stored ? toPreferences(stored) : null;
   }
 
   /**
@@ -169,12 +194,10 @@ export class NotificationRepository {
       { $set: changes, $setOnInsert: defaults },
       { upsert: true, returnDocument: 'after' },
     )
-      .select({ websiteDown: 1, websiteRecovered: 1 })
-      .lean<{ websiteDown: boolean; websiteRecovered: boolean }>()
+      .select(PREFERENCE_PROJECTION)
+      .lean<Partial<NotificationPreferences>>()
       .exec();
 
-    return updated
-      ? { websiteDown: updated.websiteDown, websiteRecovered: updated.websiteRecovered }
-      : DEFAULT_NOTIFICATION_PREFERENCES;
+    return updated ? toPreferences(updated) : DEFAULT_NOTIFICATION_PREFERENCES;
   }
 }

@@ -3,12 +3,14 @@ import {
   AuditLogModel,
   IncidentModel,
   InvitationModel,
+  MonitorResultModel,
   NotificationModel,
   NotificationSettingsModel,
   OrganizationMemberModel,
   OrganizationModel,
   WebsiteCheckModel,
   WebsiteModel,
+  WebsiteMonitorModel,
 } from '../models/index.js';
 
 /**
@@ -41,6 +43,8 @@ export const MANAGED_MODELS = [
   OrganizationMemberModel,
   WebsiteModel,
   WebsiteCheckModel,
+  WebsiteMonitorModel,
+  MonitorResultModel,
   IncidentModel,
   InvitationModel,
   NotificationModel,

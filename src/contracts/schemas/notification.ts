@@ -1,12 +1,20 @@
 import { z } from 'zod';
 
 import { INCIDENT_CATEGORIES } from '../domain/incident.js';
+import { PREFERENCE_FIELDS, type PreferenceField } from '../domain/notification.js';
 import { cursorPaginationQuerySchema } from './common.js';
 
-export const notificationPreferencesSchema = z.object({
-  websiteDown: z.boolean(),
-  websiteRecovered: z.boolean(),
-});
+/**
+ * Generated from the contract's field list rather than written out, so a new
+ * preference cannot exist in the model and be silently unvalidated here — which
+ * would let it through unchecked or reject it as unknown, depending on the day.
+ */
+export const notificationPreferencesSchema = z.object(
+  Object.fromEntries(PREFERENCE_FIELDS.map((field) => [field, z.boolean()])) as Record<
+    PreferenceField,
+    z.ZodBoolean
+  >,
+);
 
 export type NotificationPreferencesInput = z.infer<typeof notificationPreferencesSchema>;
 

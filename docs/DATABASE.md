@@ -100,6 +100,32 @@ and every page would scan a website's entire history to top-K sort twenty rows o
 | `incident_org_status_started_at`         | `{ organizationId, status, startedAt: -1, _id: -1 }`          | The open-incident counter and the status filter.                                                                                                                                                                                                                           |
 | `incident_website_started_at`            | `{ websiteId, startedAt: -1, _id: -1 }`                       | Incident history on a website's page.                                                                                                                                                                                                                                      |
 
+### `website_monitors`
+
+The auxiliary monitor queue: one document per `(website, type)`.
+
+| Index                         | Keys                                              | Why                                                                                                                                                                                  |
+| ----------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `monitor_website_type_unique` | `{ websiteId, type }` unique                      | One monitor of each type per website.                                                                                                                                                |
+| `monitor_due_for_run`         | `{ type, nextRunAt }`, partial on `enabled: true` | The scheduler's claim query, one type at a time. The partial filter keeps disabled monitors out of the index entirely, which matters because most websites will have most types off. |
+| `monitor_org_website`         | `{ organizationId, websiteId }`                   | The Checks panel on a website's page.                                                                                                                                                |
+| `monitor_org_type_status`     | `{ organizationId, type, status }`                | Organization-wide rollups.                                                                                                                                                           |
+
+### `monitor_results`
+
+Append-only, one document per run.
+
+| Index                            | Keys                                       | Why                                                              |
+| -------------------------------- | ------------------------------------------ | ---------------------------------------------------------------- |
+| `result_monitor_checked_at`      | `{ monitorId, checkedAt: -1, _id: -1 }`    | One monitor's history, keyset-paged.                             |
+| `result_website_type_checked_at` | `{ websiteId, type, checkedAt: -1 }`       | One website's full picture, for the detail page and for reports. |
+| `result_org_checked_at`          | `{ organizationId, checkedAt: -1 }`        | Period rollups for report generation.                            |
+| `result_ttl`                     | `{ checkedAt: 1 }`, `CHECK_RETENTION_DAYS` | Retention, same window as raw checks.                            |
+
+A crawl result carries a list of broken URLs, so these documents are much larger than a
+`website_checks` row. Both halves are bounded: the list is capped at 100 findings when it is
+written, and the document expires.
+
 ### `notifications`
 
 | Index                              | Keys                                        | Why                                                                                                                           |
@@ -184,12 +210,13 @@ while diagnosing a slow query is a normal thing to find.
 
 Monitoring data grows fast: one website on a one-minute interval writes 525,600 documents a year.
 
-| Data                                | Window                             | Enforced by           |
-| ----------------------------------- | ---------------------------------- | --------------------- |
-| `website_checks`                    | `CHECK_RETENTION_DAYS`, default 90 | `check_ttl` TTL index |
-| `audit_logs`                        | 365 days                           | `audit_ttl` TTL index |
-| `session`, `verification`           | their own `expiresAt`              | TTL index at 0        |
-| `incidents`, `websites`, membership | kept                               | —                     |
+| Data                                | Window                             | Enforced by            |
+| ----------------------------------- | ---------------------------------- | ---------------------- |
+| `website_checks`                    | `CHECK_RETENTION_DAYS`, default 90 | `check_ttl` TTL index  |
+| `monitor_results`                   | `CHECK_RETENTION_DAYS`, default 90 | `result_ttl` TTL index |
+| `audit_logs`                        | 365 days                           | `audit_ttl` TTL index  |
+| `session`, `verification`           | their own `expiresAt`              | TTL index at 0         |
+| `incidents`, `websites`, membership | kept                               | —                      |
 
 Retention is enforced by MongoDB's TTL monitor, not by a scheduled job in this codebase. That is
 the point: a cleanup job that quietly stops working grows the largest collection forever, and

@@ -17,6 +17,7 @@
 export * from './audit-log.model.js';
 export * from './check-result.model.js';
 export * from './incident.model.js';
+export * from './monitor-result.model.js';
 export * from './invitation.model.js';
 export * from './notification.model.js';
 export * from './notification-settings.model.js';
@@ -24,3 +25,4 @@ export * from './organization.model.js';
 export * from './organization-member.model.js';
 export * from './user.model.js';
 export * from './website.model.js';
+export * from './website-monitor.model.js';

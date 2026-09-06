@@ -28,11 +28,30 @@ deployed together.
   documents written before a field existed. Migrations are idempotent and run before
   `pnpm indexes:sync`.
 
+- **Auxiliary monitor framework.** A second lease queue (`website_monitors`) and a second scheduler
+  loop in the worker, running one monitor type at a time with its own concurrency budget and
+  timeout. Results are append-only in `monitor_results` and expire on the same window as raw
+  checks. A paused website pauses every monitor on it.
+- **SSL certificate monitoring.** Chain validity, hostname coverage per RFC 6125, issuer, protocol
+  and days remaining, with configurable warning and critical windows. The handshake is performed
+  directly so an invalid certificate is still readable, and the address guard runs before it.
+- **Domain expiry monitoring.** RDAP first, WHOIS as a fallback, behind a provider interface. The
+  registrable domain is found by asking registries rather than by bundling a public suffix list. An
+  unparseable date becomes null rather than a guess.
+- Per-monitor notification preferences, and email alerts for a monitor problem and its recovery.
+
 ### Changed
 
 - The unique partial index that deduplicates open incidents moved from `{ websiteId }` to
   `{ websiteId, category }` and is renamed `incident_one_open_per_website_category`. Existing
   documents are backfilled by `pnpm migrate`, which must run before the index is rebuilt.
+- **`error` is now distinct from `failing` throughout monitoring.** A check that could not reach an
+  answer neither opens nor resolves an incident, and does not change the monitor's displayed status
+  until three consecutive failures. Reporting an unreachable registry as a healthy domain, or
+  resolving an expiry incident because a lookup timed out, were both possible before this split
+  existed.
+- `NotificationPreferences` grew from two toggles to ten, and the model, repository, validator and
+  settings form are now generated from one list in the contract rather than written out separately.
 - `MembershipRepository.countForOrganization` counts accepted members for the team-size limit.
   Pending invitations are deliberately excluded — an invitation nobody accepts would otherwise
   occupy a seat forever.

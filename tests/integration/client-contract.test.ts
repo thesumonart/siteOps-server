@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { DEFAULT_NOTIFICATION_PREFERENCES, PREFERENCE_FIELDS } from '../../src/contracts/index.js';
 import { IncidentModel, WebsiteCheckModel } from '../../src/models/index.js';
 import { onboard, type SignedInAccount } from '../support/api.js';
 import { databaseAvailable, disconnectTestDatabase } from '../support/test-db.js';
@@ -374,11 +375,16 @@ describe.skipIf(!available)('every endpoint siteOps-client calls', () => {
       .set(...org())
       .expect(200);
 
-    // Absence of a stored row means "never asked", which defaults to notifying.
-    expect(initial.body.data.preferences).toEqual({
-      websiteDown: true,
-      websiteRecovered: true,
-    });
+    /*
+     * Absence of a stored row means "never asked", which defaults to notifying.
+     * Compared against the contract's own defaults rather than a literal, so
+     * adding a preference does not break this case — but the *shape* is still
+     * asserted exactly, which is what the dashboard's settings form depends on.
+     */
+    expect(initial.body.data.preferences).toEqual(DEFAULT_NOTIFICATION_PREFERENCES);
+    expect(Object.keys(initial.body.data.preferences).sort()).toEqual(
+      [...PREFERENCE_FIELDS].sort(),
+    );
 
     const updated = await account.agent
       .patch('/api/notification-settings')
@@ -386,9 +392,9 @@ describe.skipIf(!available)('every endpoint siteOps-client calls', () => {
       .send({ websiteRecovered: false })
       .expect(200);
 
-    // A partial patch must not rewrite the field it did not mention.
+    // A partial patch must not rewrite any field it did not mention.
     expect(updated.body.data.preferences).toEqual({
-      websiteDown: true,
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
       websiteRecovered: false,
     });
   });

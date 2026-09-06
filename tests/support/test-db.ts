@@ -4,6 +4,7 @@ import {
   AuditLogModel,
   IncidentModel,
   InvitationModel,
+  MonitorResultModel,
   NotificationModel,
   NotificationSettingsModel,
   OrganizationMemberModel,
@@ -11,6 +12,7 @@ import {
   UserModel,
   WebsiteCheckModel,
   WebsiteModel,
+  WebsiteMonitorModel,
 } from '../../src/models/index.js';
 
 /**
@@ -37,6 +39,8 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => UserModel.syncIndexes(),
   () => WebsiteModel.syncIndexes(),
   () => WebsiteCheckModel.syncIndexes(),
+  () => WebsiteMonitorModel.syncIndexes(),
+  () => MonitorResultModel.syncIndexes(),
   () => IncidentModel.syncIndexes(),
   () => NotificationModel.syncIndexes(),
   () => NotificationSettingsModel.syncIndexes(),
@@ -50,6 +54,8 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => UserModel.deleteMany({}).exec(),
   () => WebsiteModel.deleteMany({}).exec(),
   () => WebsiteCheckModel.deleteMany({}).exec(),
+  () => WebsiteMonitorModel.deleteMany({}).exec(),
+  () => MonitorResultModel.deleteMany({}).exec(),
   () => IncidentModel.deleteMany({}).exec(),
   () => NotificationModel.deleteMany({}).exec(),
   () => NotificationSettingsModel.deleteMany({}).exec(),

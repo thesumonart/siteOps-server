@@ -12,6 +12,13 @@ import {
   type NotificationPreferences,
   type NotificationStatus,
 } from '../domain/notification.js';
+import {
+  type MonitorCheckData,
+  type MonitorConfig,
+  type MonitorFinding,
+  type MonitorStatus,
+  type MonitorType,
+} from '../domain/monitor.js';
 import { type Plan, type PlanFeature, type PlanLimits } from '../domain/plan.js';
 import { type OrganizationRole } from '../domain/roles.js';
 import { type Permission } from '../domain/permissions.js';
@@ -112,6 +119,46 @@ export interface WebsiteSummaryDto extends WebsiteDto {
   readonly uptimePercentage24h: number | null;
   readonly averageResponseTimeMs24h: number | null;
   readonly openIncidentId: string | null;
+}
+
+/** One auxiliary monitor as configured on a website. */
+export interface MonitorDto {
+  readonly id: string;
+  readonly websiteId: string;
+  readonly type: MonitorType;
+  readonly enabled: boolean;
+  readonly intervalSeconds: number;
+  readonly status: MonitorStatus;
+  readonly lastRunAt: string | null;
+  readonly lastSummary: string | null;
+  readonly nextRunAt: string | null;
+  readonly config: MonitorConfig;
+  /** The most recent result, when there is one. */
+  readonly latestResult: MonitorResultDto | null;
+}
+
+export interface MonitorResultDto {
+  readonly id: string;
+  readonly monitorId: string;
+  readonly websiteId: string;
+  readonly type: MonitorType;
+  readonly status: MonitorStatus;
+  readonly checkedAt: string;
+  readonly durationMs: number;
+  readonly summary: string;
+  readonly data: MonitorCheckData;
+  readonly findings: readonly MonitorFinding[];
+  readonly errorMessage: string | null;
+}
+
+/** Enabled monitors grouped by type and status, for the overview cards. */
+export interface MonitorSummaryDto {
+  readonly type: MonitorType;
+  readonly passing: number;
+  readonly warning: number;
+  readonly failing: number;
+  readonly error: number;
+  readonly unknown: number;
 }
 
 export interface WebsiteCheckDto {

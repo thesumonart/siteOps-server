@@ -2,13 +2,10 @@ import type {
   NotificationSettingsDto,
   UpdateNotificationPreferencesInput,
 } from '../contracts/index.js';
-import { DEFAULT_NOTIFICATION_PREFERENCES } from '../contracts/index.js';
+import { DEFAULT_NOTIFICATION_PREFERENCES, PREFERENCE_FIELDS } from '../contracts/index.js';
+import type { PreferenceField } from '../contracts/index.js';
 import { ApiError } from '../errors/ApiError.js';
-import {
-  PREFERENCE_FIELDS,
-  type NotificationRepository,
-  type PreferenceField,
-} from '../repositories/notification.repository.js';
+import type { NotificationRepository } from '../repositories/notification.repository.js';
 import type { OrganizationContext } from '../types/common.types.js';
 import { toObjectId } from '../utils/object-id.js';
 
