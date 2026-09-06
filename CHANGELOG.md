@@ -39,6 +39,17 @@ deployed together.
   registrable domain is found by asking registries rather than by bundling a public suffix list. An
   unparseable date becomes null rather than a guess.
 - Per-monitor notification preferences, and email alerts for a monitor problem and its recovery.
+- **Performance monitoring**, behind a provider interface. Google PageSpeed Insights supplies real
+  Lighthouse scores and Core Web Vitals when `PAGESPEED_API_KEY` is set; a synthetic provider
+  measures time to first byte, page weight and render-blocking resources otherwise, and reports
+  null for everything it cannot measure rather than inventing it. Every result names its source.
+- **Website change detection**, with a normalizer that strips timestamps, tokens, counters and
+  tracking parameters before hashing, and configurable sensitivity so a news homepage and a pricing
+  page can be watched differently.
+- **SEO health monitoring** over the machine-readable signals in one document. The scope is
+  documented rather than implied: no rankings, no content quality, nothing needing a browser.
+- **Broken-link crawling**, bounded on pages, depth, links, wall clock, bytes and concurrency, with
+  `robots.txt` honoured by default and every fetch behind the shared address guard.
 
 ### Changed
 
@@ -52,6 +63,9 @@ deployed together.
   existed.
 - `NotificationPreferences` grew from two toggles to ten, and the model, repository, validator and
   settings form are now generated from one list in the contract rather than written out separately.
+- The SSRF boundary moved into `src/monitoring/safe-request.ts` and is now shared by the uptime
+  checker and every page-fetching monitor. It was duplicated the moment a second fetcher existed,
+  and a second implementation of that boundary is a second thing to get wrong.
 - `MembershipRepository.countForOrganization` counts accepted members for the team-size limit.
   Pending invitations are deliberately excluded — an invitation nobody accepts would otherwise
   occupy a seat forever.

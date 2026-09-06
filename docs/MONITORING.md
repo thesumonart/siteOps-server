@@ -370,3 +370,104 @@ reason.
 `example.com` outwards and taking the first name a registry recognises — `co.uk` answers "not
 found" and `example.co.uk` answers with a record, so the registry itself is the authority. That is
 one request in the common case, three at most, and nothing to keep up to date.
+
+### Performance
+
+**This is the honest version of "Lighthouse monitoring", and the distinction is
+load-bearing.** Real Lighthouse scores and real Core Web Vitals require running Chrome against the
+page. SiteOps does not bundle a browser: a headless Chrome per worker is hundreds of megabytes of
+image, a gigabyte of RAM per concurrent run and a second thing to patch, and it would make the
+worker undeployable on the class of host this product targets.
+
+So there are two providers, and every result names which one produced it.
+
+|                                                           | `pagespeed`                                 | `synthetic`                    |
+| --------------------------------------------------------- | ------------------------------------------- | ------------------------------ |
+| Needs                                                     | `PAGESPEED_API_KEY`                         | nothing                        |
+| Runs                                                      | Real Lighthouse, on Google's infrastructure | A server-side fetch            |
+| Performance / accessibility / best-practices / SEO scores | Real                                        | Only its own performance score |
+| LCP, CLS, TBT, Speed Index                                | Real                                        | **null**                       |
+| TTFB, page weight, request count                          | Real                                        | Real                           |
+| Can measure a private staging site                        | No                                          | Yes                            |
+
+The synthetic provider reports `null` for everything it cannot measure rather than a plausible
+guess, because a number on a dashboard is believed. Its `performanceScore` is **its own**, derived
+from time to first byte, total transfer time, page weight and render-blocking resource count. It is
+a useful trend line and is deliberately not comparable to a Lighthouse score.
+
+With a key configured, PageSpeed runs and synthetic is the fallback. A Google outage or an exhausted
+quota degrades the monitor to synthetic measurement rather than silencing it.
+
+### Change detection
+
+The whole difficulty is that almost every page differs from itself on every fetch and almost none of
+those differences mean anything. A monitor that reports them all gets turned off within a week, and
+then it is not there when the pricing page really does change.
+
+`content-normalizer.ts` therefore removes, before hashing: scripts, styles, comments, ISO and
+relative timestamps, hex tokens and UUIDs, comma-grouped counters, tracking parameters, and whatever
+the user configured to ignore. Whitespace is collapsed so reformatting is invisible.
+
+Sensitivity is the share of the page that must differ before a change is reported:
+
+| Setting            | Threshold | For                                      |
+| ------------------ | --------- | ---------------------------------------- |
+| Only large changes | 20%       | A news homepage                          |
+| Noticeable changes | 5%        | A typical marketing site                 |
+| Any change         | 0%        | A pricing page, where one figure matters |
+
+The diff is a multiset comparison of lines rather than a longest-common-subsequence diff: reordering
+a navigation menu is not a content change, and counting by occurrence catches three of something
+becoming two, which a plain set would miss.
+
+The baseline is the previous run, not a pinned snapshot. A change is reported once and the next run
+compares against the new content; a pinned baseline would re-alert forever until somebody cleared it.
+
+A change is `warning`, never `failing`. Somebody probably meant to change the page.
+
+**Selectors are a documented subset, not CSS.** `tag`, `.class` and `#id` only. Pretending to
+support full CSS would be worse: someone would write `.ads > .banner`, see nothing happen, and
+conclude the feature is broken.
+
+### SEO
+
+Scope, stated plainly because "SEO monitoring" promises more than any single page fetch can deliver.
+
+**Checked:** title and its length, meta description and its length, canonical, robots meta and
+`X-Robots-Tag`, indexability, `robots.txt`, sitemap (declared or conventional), `h1` presence and
+count, image alt coverage, Open Graph completeness, HTTPS, declared language, word count, internal
+link presence.
+
+**Not checked, and not claimable:** content quality, keyword relevance, backlinks, competitor
+position, actual rankings, crawl budget, or anything needing a rendered page. A JavaScript-only site
+will score badly here and may rank perfectly well.
+
+The score is a weighted count of those checks and nothing else. It is useful as a trend and is not
+comparable to any other tool's number. Indexability carries thirty of the hundred points on its own:
+a `noindex` left on after a deploy removes the page from search entirely, and it is the only SEO
+finding that is `failing` rather than `warning`.
+
+### Broken links
+
+The most intrusive thing SiteOps does to a customer's site. Every bound is hard, not a default:
+
+| Bound          | Value                                                       |
+| -------------- | ----------------------------------------------------------- |
+| Pages          | Plan cap, clamped again in the crawler                      |
+| Depth          | 1–5, configured                                             |
+| Links checked  | 1,500, independent of pages                                 |
+| Wall clock     | The monitor's timeout, less a margin for writing the result |
+| Concurrency    | One request at a time, plus any `Crawl-delay`               |
+| Bytes per page | 2 MB                                                        |
+| Reported links | 100; the rest are counted                                   |
+
+`robots.txt` is honoured by default, including `Allow`, wildcards, `$` anchors and `Crawl-delay`.
+Ignoring it is opt-in and the dialog says why you would only do that for a site you own.
+
+Links are checked with `HEAD` and retried with `GET` only on a 405 or 501. **401, 403 and 429 are
+not reported as broken**: the first two are how an admin area answers an anonymous crawler while
+working perfectly for the people it is for, and the third is the site asking us to slow down.
+Reporting them would bury the real 404s.
+
+Every fetch goes through the same guarded dispatcher as everything else, so a link to
+`169.254.169.254` is refused at connect time. That case has a test.

@@ -86,6 +86,17 @@ export const envSchema = z
     CHECK_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(90),
 
     /**
+     * Google PageSpeed Insights API key.
+     *
+     * Optional. With it, the performance monitor gets real Lighthouse scores
+     * and real Core Web Vitals from Google's own infrastructure. Without it,
+     * the monitor falls back to server-side measurement, which reports time to
+     * first byte, page weight and render-blocking resources but no Lighthouse
+     * score and no LCP or CLS — see docs/MONITORING.md.
+     */
+    PAGESPEED_API_KEY: z.string().min(1).optional(),
+
+    /**
      * Disables SSRF address filtering so the test suite can reach a mock server
      * on loopback. Enabling it in production would turn the worker into an open
      * proxy into the private network, so it is refused there outright.

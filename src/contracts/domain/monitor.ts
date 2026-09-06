@@ -341,6 +341,11 @@ export interface PerformanceCheckData {
   readonly strategy: 'mobile' | 'desktop';
 }
 
+/** Normalized lines kept with a content result, so the next run can diff. */
+export const MAX_STORED_CONTENT_LINES = 400;
+/** Longest single line kept, so one minified blob cannot dominate a document. */
+export const MAX_STORED_LINE_LENGTH = 400;
+
 export interface ContentCheckData {
   readonly contentHash: string;
   readonly previousHash: string | null;
@@ -352,6 +357,19 @@ export interface ContentCheckData {
   readonly removedLineCount: number;
   /** A short, bounded excerpt of what changed, for the notification body. */
   readonly excerpt: string | null;
+  /**
+   * The normalized lines this run saw, so the *next* run can produce a
+   * line-level diff rather than only "the hash differs".
+   *
+   * Bounded on both axes ({@link MAX_STORED_CONTENT_LINES} and
+   * {@link MAX_STORED_LINE_LENGTH}). Storing a full copy of every watched page
+   * on every run would make this the largest collection in the product; the cap
+   * means a very long page's diff covers its opening rather than all of it,
+   * which is where a meaningful change almost always is. The hash is computed
+   * over the *whole* normalized text regardless, so detection is never
+   * truncated — only the explanation is.
+   */
+  readonly lines: readonly string[];
 }
 
 export interface SeoCheckData {

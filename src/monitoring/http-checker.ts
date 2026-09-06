@@ -1,13 +1,11 @@
 import {
   isSuccessfulHttpStatus,
-  normalizeWebsiteUrl,
   type CheckErrorType,
   type CheckStatus,
 } from '../contracts/index.js';
-import { Agent, request } from 'undici';
+import { request } from 'undici';
 
-import { isLoopbackAddress } from './address-guard.js';
-import { createSafeLookup } from './safe-lookup.js';
+import { closeDispatcher, createGuardedDispatcher, validateHopUrl } from './safe-request.js';
 
 /**
  * Performs one monitoring request.
@@ -20,6 +18,10 @@ import { createSafeLookup } from './safe-lookup.js';
  *     hop is re-validated — both its URL string and, through the lookup, the
  *     address it resolves to. A public URL that 302s into cloud metadata is
  *     refused mid-chain.
+ *
+ * Both live in `safe-request.ts` and are shared with the page fetcher the
+ * auxiliary monitors use. A second implementation of the SSRF boundary would be
+ * a second thing to get wrong.
  */
 
 export interface CheckOptions {
@@ -142,63 +144,10 @@ function statusForError(type: CheckErrorType): CheckStatus {
   return type === 'timeout' ? 'timeout' : type === 'http_error' ? 'down' : 'error';
 }
 
-/**
- * Re-checks a URL's *string* form on every hop.
- *
- * This is not redundant with the connect-time address guard: Node's socket
- * layer skips a custom DNS `lookup` entirely whenever the host is already an
- * IP literal (`net.isIP()` short-circuits it), so a redirect straight to
- * `http://169.254.169.254/` would never reach `safe-lookup.ts` at all. This
- * string check, run again on every hop, is what actually catches that case —
- * it rejects non-HTTP schemes, internal hostnames and blocked IP literals
- * before a socket is ever opened.
- */
-function validateHopUrl(
-  url: string,
-  allowLoopback: boolean,
-): { ok: true; href: string } | { ok: false; reason: string; blocked: boolean } {
-  const normalized = normalizeWebsiteUrl(url);
-  if (normalized.ok) return { ok: true, href: normalized.value.href };
-
-  /*
-   * In test mode the mock server lives on loopback, which string validation
-   * rejects by design. The bypass here is intentionally narrow: it re-parses
-   * the URL and checks that the *actual resolved hostname* is loopback via the
-   * same predicate the connect-time guard uses — never "any blocked reason",
-   * which would silently wave through every other private range too. This was
-   * exactly the shape of a real SSRF regression caught by this module's own
-   * test suite: a first draft bypassed the string check for any
-   * `blocked_hostname` / `blocked_ip` reason, which let a redirect to
-   * 169.254.169.254 slip through in test mode.
-   */
-  if (allowLoopback) {
-    try {
-      const parsed = new URL(url);
-      const isHttp = parsed.protocol === 'http:' || parsed.protocol === 'https:';
-      const bareHost = parsed.hostname.replace(/^\[|\]$/g, '');
-      if (isHttp && (bareHost.toLowerCase() === 'localhost' || isLoopbackAddress(bareHost))) {
-        return { ok: true, href: parsed.toString() };
-      }
-    } catch {
-      // Falls through to the rejection below.
-    }
-  }
-
-  const blocked = normalized.reason === 'blocked_ip' || normalized.reason === 'blocked_hostname';
-  return { ok: false, reason: normalized.detail, blocked };
-}
-
 export async function checkWebsite(url: string, options: CheckOptions): Promise<CheckOutcome> {
-  const dispatcher = new Agent({
-    connect: {
-      lookup: createSafeLookup({ allowLoopback: options.allowLoopback }),
-      timeout: options.timeoutMs,
-    },
-    headersTimeout: options.timeoutMs,
-    bodyTimeout: options.timeoutMs,
-    // Connections are not reused across checks: a pooled socket would skip the
-    // lookup, and with it the address guard, on a later request.
-    pipelining: 0,
+  const dispatcher = createGuardedDispatcher({
+    timeoutMs: options.timeoutMs,
+    allowLoopback: options.allowLoopback,
   });
 
   const startedAt = process.hrtime.bigint();
@@ -303,32 +252,5 @@ export async function checkWebsite(url: string, options: CheckOptions): Promise<
     };
   } finally {
     await closeDispatcher(dispatcher);
-  }
-}
-
-/**
- * Tears down the connection pool without letting the teardown replace the
- * result.
- *
- * A graceful `close()` waits for in-flight requests, and this function is
- * reached with a request that was just aborted or whose socket the origin
- * destroyed — so it can reject. An exception thrown from a `finally` block
- * *replaces* the value the `try` already produced, which would turn a
- * perfectly good "the site is down" into a thrown error the caller has to
- * classify from scratch.
- *
- * So: close gracefully, fall back to destroying the pool, and if even that
- * fails, let it go. The dispatcher is unreachable after this either way, and a
- * leaked socket is a far smaller problem than a lost check result.
- */
-async function closeDispatcher(dispatcher: Agent): Promise<void> {
-  try {
-    await dispatcher.close();
-  } catch {
-    try {
-      await dispatcher.destroy();
-    } catch {
-      // Nothing further can be done, and nothing depends on it.
-    }
   }
 }

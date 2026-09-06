@@ -7,7 +7,13 @@ import { EmailService } from './email/email.service.js';
 import { createEmailMonitorNotifier } from './jobs/monitor-notifier.js';
 import { MonitorSchedulerLoop } from './jobs/monitor-scheduler-loop.js';
 import { SchedulerLoop } from './jobs/scheduler-loop.js';
+import { createPageSpeedProvider } from './monitoring/performance/pagespeed-provider.js';
+import { createSyntheticProvider } from './monitoring/performance/synthetic-provider.js';
+import { createContentRunner } from './monitoring/runners/content.runner.js';
 import { createDomainRunner } from './monitoring/runners/domain.runner.js';
+import { createLinksRunner } from './monitoring/runners/links.runner.js';
+import { createPerformanceRunner } from './monitoring/runners/performance.runner.js';
+import { createSeoRunner } from './monitoring/runners/seo.runner.js';
 import { createSslRunner } from './monitoring/runners/ssl.runner.js';
 import type { MonitorRunner } from './monitoring/monitor-runner.js';
 import type { MonitorType } from './contracts/index.js';
@@ -71,9 +77,27 @@ const state: RuntimeState = {
  * A type with no entry is simply never run — the job logs it and moves on — so
  * a monitor can be shipped as a contract and a UI before its runner exists
  * without the worker crashing on it.
+ *
+ * Performance is given both providers in order. PageSpeed runs real Lighthouse
+ * on Google's infrastructure and is preferred when a key is configured; the
+ * synthetic provider measures what a server-side fetch honestly can and always
+ * works. A configured PageSpeed that fails falls through rather than failing
+ * the run, so a Google outage degrades the monitor instead of silencing it.
  */
 function buildRunners(): ReadonlyMap<MonitorType, MonitorRunner> {
-  const runners: MonitorRunner[] = [createSslRunner(), createDomainRunner()];
+  const runners: MonitorRunner[] = [
+    createSslRunner(),
+    createDomainRunner(),
+    createPerformanceRunner({
+      providers: [
+        createPageSpeedProvider({ apiKey: env.PAGESPEED_API_KEY }),
+        createSyntheticProvider(),
+      ],
+    }),
+    createContentRunner(),
+    createSeoRunner(),
+    createLinksRunner(),
+  ];
   return new Map(runners.map((runner) => [runner.type, runner]));
 }
 
