@@ -1,4 +1,5 @@
 import type { CursorPaginatedResult, IncidentDto, ListIncidentsQuery } from '../contracts/index.js';
+import { categoryForIncidentType } from '../contracts/index.js';
 import { ApiError } from '../errors/ApiError.js';
 import type { IncidentRecord, IncidentRepository } from '../repositories/incident.repository.js';
 import type { WebsiteLabel, WebsiteRepository } from '../repositories/website.repository.js';
@@ -23,6 +24,7 @@ export class IncidentService {
       organizationId: organization.objectId,
       pageSize: query.pageSize,
       status: query.status,
+      category: query.category,
       websiteId: query.websiteId,
       cursor: decodeOptionalCursor(query.cursor),
     });
@@ -151,6 +153,11 @@ export function toIncidentDto(incident: IncidentRecord, website?: WebsiteLabel):
     websiteUrl: website?.url ?? '',
     status: incident.status,
     type: incident.type,
+    // Older documents predate the category field; every incident written
+    // before it existed was an availability failure.
+    category: incident.category ?? categoryForIncidentType(incident.type),
+    severity: incident.severity ?? 'critical',
+    detail: incident.detail ?? null,
     startedAt: incident.startedAt.toISOString(),
     resolvedAt: incident.resolvedAt?.toISOString() ?? null,
     durationSeconds: incident.durationSeconds,

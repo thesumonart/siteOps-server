@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { INCIDENT_CATEGORIES } from '../domain/incident.js';
 import { cursorPaginationQuerySchema } from './common.js';
 
 export const notificationPreferencesSchema = z.object({
@@ -26,6 +27,7 @@ export type ListNotificationsQuery = z.infer<typeof listNotificationsQuerySchema
 
 export const listIncidentsQuerySchema = cursorPaginationQuerySchema.extend({
   status: z.enum(['open', 'resolved']).optional(),
+  category: z.enum(INCIDENT_CATEGORIES).optional(),
   websiteId: z
     .string()
     .regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid identifier.')

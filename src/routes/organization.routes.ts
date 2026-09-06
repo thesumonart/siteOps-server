@@ -21,7 +21,10 @@ import type { ApiDependencies } from './index.js';
 export function organizationRoutes(dependencies: ApiDependencies): Router {
   const router = Router();
   const auth = requireAuth(dependencies.authService);
-  const organizations = new OrganizationController(dependencies.organizationService);
+  const organizations = new OrganizationController(
+    dependencies.organizationService,
+    dependencies.entitlementService,
+  );
   const members = new MemberController(dependencies.memberService);
 
   router.get('/organizations', auth, asyncHandler(organizations.list));
@@ -42,6 +45,19 @@ export function organizationRoutes(dependencies: ApiDependencies): Router {
     validate(organizationValidators.update),
     requireOrganization(dependencies.organizations, 'organization:update'),
     asyncHandler(organizations.update),
+  );
+
+  /*
+   * Plan entitlements and current usage. Only `organization:read`, which every
+   * role holds: a member who cannot see why an action is unavailable is shown
+   * a failure they cannot explain.
+   */
+  router.get(
+    '/organizations/:organizationId/entitlements',
+    auth,
+    validate(organizationValidators.byId),
+    requireOrganization(dependencies.organizations, 'organization:read'),
+    asyncHandler(organizations.entitlements),
   );
 
   router.get(

@@ -12,6 +12,7 @@
  * contract, because a browser has nothing to validate about them.
  */
 
+export * from './audit.validator.js';
 export * from './common.validator.js';
 export * from './incident.validator.js';
 export * from './notification.validator.js';

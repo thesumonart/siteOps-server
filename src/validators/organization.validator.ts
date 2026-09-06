@@ -14,6 +14,7 @@ import {
 
 export const organizationValidators = {
   create: { body: createOrganizationSchema } satisfies ValidationSchemas,
+  byId: { params: organizationParamsSchema } satisfies ValidationSchemas,
   update: {
     params: organizationParamsSchema,
     body: updateOrganizationSchema,

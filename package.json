@@ -25,6 +25,7 @@
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write \"**/*.{ts,mts,js,mjs,cjs,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,mts,js,mjs,cjs,json,md,yml,yaml}\"",
+    "migrate": "tsx --env-file-if-exists=.env scripts/migrate.ts",
     "indexes:sync": "tsx --env-file-if-exists=.env scripts/sync-indexes.ts",
     "indexes:verify": "tsx --env-file-if-exists=.env scripts/verify-indexes.ts",
     "seed": "tsx --env-file-if-exists=.env scripts/seed.ts",

@@ -1,6 +1,6 @@
 import type { Types } from 'mongoose';
 
-import type { IncidentStatus } from '../contracts/index.js';
+import type { IncidentCategory, IncidentStatus } from '../contracts/index.js';
 import { IncidentModel, type IncidentAttributes } from '../models/index.js';
 import { toObjectId } from '../utils/object-id.js';
 import { cursorFilter, type DecodedCursor } from '../utils/pagination.js';
@@ -13,6 +13,7 @@ export interface ListIncidentsFilter {
   readonly organizationId: Types.ObjectId;
   readonly pageSize: number;
   readonly status?: IncidentStatus | undefined;
+  readonly category?: IncidentCategory | undefined;
   readonly websiteId?: string | undefined;
   readonly cursor?: DecodedCursor | undefined;
 }
@@ -38,6 +39,7 @@ export class IncidentRepository {
     const query: Record<string, unknown> = { organizationId: filter.organizationId };
 
     if (filter.status) query.status = filter.status;
+    if (filter.category) query.category = filter.category;
 
     if (filter.websiteId) {
       const websiteObjectId = toObjectId(filter.websiteId);
@@ -117,7 +119,15 @@ export class IncidentRepository {
     return IncidentModel.countDocuments({ organizationId, status: 'open' }).exec();
   }
 
-  /** The open incident for each of the given websites, keyed by website id. */
+  /**
+   * The open *availability* incident for each of the given websites, keyed by
+   * website id.
+   *
+   * Availability only: this is what the website table links to as "currently
+   * down", and an expiring certificate must not make a responding site look
+   * like it is in an outage. Other open incidents are surfaced on the website's
+   * own page and in the incident list, both of which read by category.
+   */
   async openIncidentIdsFor(
     organizationId: Types.ObjectId,
     websiteIds: readonly Types.ObjectId[],
@@ -127,6 +137,7 @@ export class IncidentRepository {
     const rows = await IncidentModel.find({
       organizationId,
       status: 'open',
+      category: 'availability',
       websiteId: { $in: websiteIds },
     })
       .select({ websiteId: 1 })

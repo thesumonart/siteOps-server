@@ -1,7 +1,7 @@
 import type { Types } from 'mongoose';
 
 import { IncidentModel } from '../models/index.js';
-import type { CheckErrorType, IncidentType } from '../contracts/index.js';
+import type { CheckErrorType, IncidentCategory, IncidentType } from '../contracts/index.js';
 
 import { createLogger } from '../utils/logger.js';
 import { type IncidentTransition } from './incident-rules.js';
@@ -52,10 +52,19 @@ function incidentTypeFor(errorType: CheckErrorType | null): IncidentType {
 }
 
 /**
+ * The category every uptime failure belongs to.
+ *
+ * Named once here because it appears in the insert, in the duplicate-key
+ * read-back and in the availability queries elsewhere; they have to agree or
+ * the unique index stops deduplicating.
+ */
+const AVAILABILITY: IncidentCategory = 'availability';
+
+/**
  * Applies an incident-rules decision to the database.
  *
  * The `open` path relies on the unique partial index
- * (`incident_one_open_per_website`) as the actual guarantee against duplicate
+ * (`incident_one_open_per_website_category`) as the actual guarantee against duplicate
  * incidents, not on this function's own logic: if two callers somehow race —
  * the lease should make that impossible, but the index is what makes it
  * impossible even if the lease is ever bypassed — the loser's insert fails
@@ -128,6 +137,8 @@ async function openIncident(context: IncidentCheckContext): Promise<IncidentAppl
       websiteId: context.websiteId,
       status: 'open',
       type: incidentTypeFor(context.errorType),
+      category: AVAILABILITY,
+      severity: 'critical',
       startedAt: context.checkedAt,
       failedCheckCount: context.failedCheckCount,
       lastStatusCode: context.statusCode,
@@ -151,6 +162,7 @@ async function openIncident(context: IncidentCheckContext): Promise<IncidentAppl
       // this as our own fresh open (no duplicate notification should fire).
       const existing = await IncidentModel.findOne({
         websiteId: context.websiteId,
+        category: AVAILABILITY,
         status: 'open',
       })
         .lean<{ _id: Types.ObjectId }>()

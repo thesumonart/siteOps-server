@@ -149,7 +149,7 @@ is broken, not that a test is stale.
 - Never declare a site down on one failed check. Failure and recovery thresholds absorb transient
   noise.
 - Incident and notification logic must be idempotent, and the guarantees are enforced by unique
-  indexes (`incident_one_open_per_website`, `notification_dedupe_unique`), not by application
+  indexes (`incident_one_open_per_website_category`, `notification_dedupe_unique`), not by application
   bookkeeping. Keep it that way.
 - One notification per incident transition. Never repeat while a site stays down.
 - Uptime is floored, never rounded up. Response-time statistics exclude failed checks.

@@ -2,8 +2,11 @@ import { createHmac } from 'node:crypto';
 import type { Express } from 'express';
 import request, { type Agent } from 'supertest';
 
+import { Types } from 'mongoose';
+
 import { createApp } from '../../src/app.js';
 import { env } from '../../src/config/env.js';
+import type { Plan } from '../../src/contracts/index.js';
 
 /**
  * Drives the real Express application over HTTP, against a real database.
@@ -119,14 +122,32 @@ export async function createOrganization(agent: Agent, name: string): Promise<st
   return (response.body as { data: { organization: { id: string } } }).data.organization.id;
 }
 
+/**
+ * Puts an organization on a plan.
+ *
+ * The plan is server-owned state with no route that sets it — billing is the
+ * only thing that changes it in production — so a test that needs a paid
+ * feature writes the document directly. Doing it through a fake billing
+ * endpoint would test the fake.
+ */
+export async function setOrganizationPlan(organizationId: string, plan: Plan): Promise<void> {
+  const { OrganizationModel } = await import('../../src/models/index.js');
+  await OrganizationModel.updateOne(
+    { _id: new Types.ObjectId(organizationId) },
+    { $set: { plan } },
+  ).exec();
+}
+
 /** Registers, verifies, signs in and creates one organization. */
 export async function onboard(
   label: string,
+  options: { readonly plan?: Plan } = {},
 ): Promise<SignedInAccount & { organizationId: string }> {
   const signedIn = await signUpAndVerify(label);
   const organizationId = await createOrganization(
     signedIn.agent,
     `Org ${label} ${signedIn.userId.slice(-6)}`,
   );
+  if (options.plan) await setOrganizationPlan(organizationId, options.plan);
   return { ...signedIn, organizationId };
 }

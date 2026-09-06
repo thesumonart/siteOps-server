@@ -22,6 +22,7 @@ import { WebsiteRepository } from './repositories/website.repository.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
+import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
 import { MemberService } from './services/member.service.js';
 import { MonitorService } from './services/monitor.service.js';
@@ -111,6 +112,12 @@ export function createApp(): Express {
   const auditLogRepository = new AuditLogRepository();
 
   const auditService = new AuditService(auditLogRepository);
+  const entitlementService = new EntitlementService(
+    buildUsageCounters({
+      websites: websiteRepository,
+      memberships: membershipRepository,
+    }),
+  );
   const organizationService = new OrganizationService(organizationRepository, auditService);
   const authService = new AuthService(auth, organizationService);
   const memberService = new MemberService(
@@ -137,6 +144,8 @@ export function createApp(): Express {
   const dependencies: ApiDependencies = {
     organizations: organizationRepository,
     authService,
+    auditService,
+    entitlementService,
     organizationService,
     memberService,
     websiteService,
@@ -154,6 +163,38 @@ export function createApp(): Express {
   app.use(errorHandler);
 
   return app;
+}
+
+/**
+ * The repositories the usage counters read from.
+ *
+ * Declared as an explicit shape rather than taking the whole dependency graph,
+ * so adding a counter is visibly a decision about which repository it reads.
+ */
+interface UsageRepositories {
+  readonly websites: WebsiteRepository;
+  readonly memberships: MembershipRepository;
+}
+
+/**
+ * Wires each plan limit to the query that measures it.
+ *
+ * Kept out of `EntitlementService` so that service stays free of repository
+ * imports and can be unit-tested with counters that return fixed numbers.
+ */
+function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
+  return {
+    websites: (organizationId) => repositories.websites.countForOrganization(organizationId),
+    members: (organizationId) => repositories.memberships.countForOrganization(organizationId),
+    clients: () => Promise.resolve(0),
+    statusPages: () => Promise.resolve(0),
+    apiKeys: () => Promise.resolve(0),
+    integrations: () => Promise.resolve(0),
+    reportSchedules: () => Promise.resolve(0),
+    customDomains: () => Promise.resolve(0),
+    apiRequestsToday: () => Promise.resolve(0),
+    aiGenerationsThisMonth: () => Promise.resolve(0),
+  };
 }
 
 /** Exported so tests can build a request-authenticating middleware of their own. */

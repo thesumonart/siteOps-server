@@ -125,8 +125,13 @@ A success resets the failure streak and vice versa.
 
 ### Deduplication
 
-Guaranteed by a **unique partial index**, `incident_one_open_per_website` on `{ websiteId }` where
-`status: 'open'` — not by application bookkeeping.
+Guaranteed by a **unique partial index**, `incident_one_open_per_website_category` on
+`{ websiteId, category }` where `status: 'open'` — not by application bookkeeping.
+
+The key includes the category because SiteOps raises incidents from more than one source. Every
+uptime failure maps to the `availability` category, so two outages for one website still cannot
+coexist; an expiring certificate is `ssl` and can be open at the same time, because suppressing it
+because the site also happens to be down would lose the alert that mattered.
 
 If two callers somehow race (the lease should make it impossible, but the index makes it impossible
 even if the lease is ever bypassed), the loser's insert fails with a duplicate-key error, which is

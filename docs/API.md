@@ -434,8 +434,13 @@ Permission: `monitoring:read`. Query: `cursor`, `pageSize`, `status`. Cursor-pag
 
 ### `GET /api/incidents`
 
-Permission: `incident:read`. Query: `cursor`, `pageSize`, `status`, `websiteId`. Cursor-paginated
-`IncidentDto`, newest first.
+Permission: `incident:read`. Query: `cursor`, `pageSize`, `status`, `category`, `websiteId`.
+Cursor-paginated `IncidentDto`, newest first.
+
+`category` is the incident's deduplication bucket — `availability`, `ssl`, `domain`, `performance`,
+`content`, `seo`, `links` or `anomaly`. A website may have one open incident per category, so a
+certificate warning and an outage can be open at the same time. Only `availability` incidents count
+against uptime.
 
 `websiteName` and `websiteUrl` are resolved onto the response rather than stored on the document,
 so renaming a website changes how its past incidents read.
@@ -456,6 +461,65 @@ outage over, not that the site is back.
 | Failure          | Status | Code                        |
 | ---------------- | ------ | --------------------------- |
 | Already resolved | 409    | `INCIDENT_ALREADY_RESOLVED` |
+
+---
+
+## Plan entitlements
+
+### `GET /api/organizations/:organizationId/entitlements`
+
+Permission: `organization:read`. What the organization's plan allows, and how much of it is in use.
+
+```json
+{
+  "plan": "agency",
+  "features": ["ssl_monitoring", "clients", "api_access", "..."],
+  "limits": { "maxWebsites": 50, "maxClients": 50, "apiRequestsPerDay": 20000 },
+  "usage": { "websites": 12, "members": 4, "clients": 7 }
+}
+```
+
+Read by the dashboard so it can explain a locked feature rather than letting someone discover it by
+being refused. **It is never the enforcement.** Every gated route calls the same
+`EntitlementService` before doing any work, so an API client, a stale tab or a hand-written request
+is refused identically to a button that was never rendered. A refusal is `403`
+`PLAN_LIMIT_REACHED`, and its message names the cheapest plan that would allow the action.
+
+---
+
+## Audit log
+
+Append-only. There is **no** route that creates, edits or deletes an entry, on any plan, at any
+role — entries are written as a side effect of the action they describe, and removed only by the
+365-day TTL index. An audit log an owner can rewrite is not an audit log.
+
+Requires the `audit_logs` plan feature (Professional and above) in addition to the permission.
+
+### `GET /api/audit-logs`
+
+Permission: `audit_log:read` — admins and owners, not ordinary members. Cursor-paginated
+`AuditLogDto`, newest first.
+
+| Query         | Meaning                                                               |
+| ------------- | --------------------------------------------------------------------- |
+| `cursor`      | Opaque page position from a previous response                         |
+| `pageSize`    | 1–100, default 20                                                     |
+| `area`        | One of `organization`, `website`, `member`, `billing`, …              |
+| `action`      | An exact action; wins over `area` when both are given                 |
+| `actorUserId` | Entries by one person                                                 |
+| `targetType`  | Entries about one kind of thing, e.g. `website`                       |
+| `targetId`    | Entries about one specific thing                                      |
+| `search`      | Free text over the recorded actor and target names; treated literally |
+| `from` / `to` | ISO 8601 bounds, inclusive; an inverted range is a field error        |
+
+`actorName` and `targetLabel` are snapshots taken when the entry was written, so the feed still
+reads correctly after a rename and does not rewrite its own history.
+
+### `GET /api/audit-logs/actors`
+
+Permission: `audit_log:read`. `{ "items": [{ "id": "...", "name": "..." }] }` — the distinct people
+who appear in this organization's log, newest first, capped at 50. Populates the filter dropdown
+without the client having to derive it from whichever page is loaded.
 
 ---
 

@@ -5,6 +5,7 @@ import { currentUser } from '../middlewares/auth.middleware.js';
 import { currentOrganization } from '../middlewares/organization.middleware.js';
 import { validatedBody } from '../middlewares/validate.middleware.js';
 import { ApiResponse } from '../responses/ApiResponse.js';
+import type { EntitlementService } from '../services/entitlement.service.js';
 import type { OrganizationService } from '../services/organization.service.js';
 
 /**
@@ -14,7 +15,10 @@ import type { OrganizationService } from '../services/organization.service.js';
  * `Request` object to work would be unreachable from there.
  */
 export class OrganizationController {
-  constructor(private readonly organizations: OrganizationService) {}
+  constructor(
+    private readonly organizations: OrganizationService,
+    private readonly plans: EntitlementService,
+  ) {}
 
   /**
    * Organizations the caller belongs to.
@@ -48,5 +52,17 @@ export class OrganizationController {
       name: user.name,
     });
     ApiResponse.ok(response, updated);
+  };
+
+  /**
+   * What this organization's plan allows, and how much of it is in use.
+   *
+   * Read by the dashboard so it can explain a locked feature rather than
+   * letting the user discover it by being refused. It is never the
+   * enforcement — every gated route re-checks the same entitlements itself.
+   */
+  entitlements = async (request: Request, response: Response): Promise<void> => {
+    const organization = currentOrganization(request);
+    ApiResponse.ok(response, await this.plans.describe(organization));
   };
 }

@@ -92,12 +92,13 @@ and every page would scan a website's entire history to top-K sort twenty rows o
 
 ### `incidents`
 
-| Index                            | Keys                                                 | Why                                                                                                                                              |
-| -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `incident_one_open_per_website`  | `{ websiteId }` unique, partial on `status: 'open'`  | **At most one open incident per website.** This is the deduplication guarantee, enforced by the database rather than by application bookkeeping. |
-| `incident_org_started_at`        | `{ organizationId, startedAt: -1, _id: -1 }`         | The incident list, newest first.                                                                                                                 |
-| `incident_org_status_started_at` | `{ organizationId, status, startedAt: -1, _id: -1 }` | The open-incident counter and the status filter.                                                                                                 |
-| `incident_website_started_at`    | `{ websiteId, startedAt: -1, _id: -1 }`              | Incident history on a website's page.                                                                                                            |
+| Index                                    | Keys                                                          | Why                                                                                                                                                                                                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `incident_one_open_per_website_category` | `{ websiteId, category }` unique, partial on `status: 'open'` | **At most one open incident per website per category.** The deduplication guarantee, enforced by the database rather than by application bookkeeping. Keyed on the category so an expiring certificate and an outage can be open together, while two outages still cannot. |
+| `incident_org_started_at`                | `{ organizationId, startedAt: -1, _id: -1 }`                  | The incident list, newest first.                                                                                                                                                                                                                                           |
+| `incident_org_category_started_at`       | `{ organizationId, category, startedAt: -1, _id: -1 }`        | The category filter on that list.                                                                                                                                                                                                                                          |
+| `incident_org_status_started_at`         | `{ organizationId, status, startedAt: -1, _id: -1 }`          | The open-incident counter and the status filter.                                                                                                                                                                                                                           |
+| `incident_website_started_at`            | `{ websiteId, startedAt: -1, _id: -1 }`                       | Incident history on a website's page.                                                                                                                                                                                                                                      |
 
 ### `notifications`
 
@@ -124,6 +125,15 @@ transition produce the same key and the second one loses.
 | `audit_org_created_at` | `{ organizationId, createdAt: -1 }` | The activity feed. |
 | `audit_ttl`            | `{ createdAt: 1 }`, 365 days        | Retention.         |
 
+The feed's narrower filters — actor, target, free text — are applied on top of the range
+`audit_org_created_at` already selects, and are bounded by the page size, so none of them turns into
+a collection scan. They are deliberately _not_ given indexes of their own: an audit log is
+write-heavy and read rarely, and six more indexes would cost every write to speed up a screen a few
+people open a few times a month.
+
+The collection is append-only. No route updates or deletes an entry, on any plan, at any role; the
+TTL index is the only thing that removes one.
+
 ### Auth collections
 
 Better Auth creates its documents but not its indexes, and its uniqueness checks are read-then-write
@@ -147,9 +157,16 @@ same sync as everything else.
 because an index build issued by a booting process can stall a live cluster. Deployments run:
 
 ```bash
+pnpm migrate          # backfills documents that a new index would reject
 pnpm indexes:sync     # creates or updates every declared index
 pnpm indexes:verify   # read-only; names what is missing, exits non-zero
 ```
+
+`pnpm migrate` runs **first**, and only matters when an index changes shape. A document written
+before a field existed indexes as null, so widening a unique index without backfilling either fails
+the build or — worse — succeeds and stops deduplicating. Every migration in
+`src/database/migrations.ts` is idempotent, so running it on an already-current database reports
+zero changes.
 
 Mongoose's own `autoIndex` does nothing in this codebase, and the reason is worth knowing: models
 compile at import time, before the connection opens, and `bufferCommands` is off — so the automatic

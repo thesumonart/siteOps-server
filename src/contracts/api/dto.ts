@@ -1,13 +1,18 @@
-import { type AuditAction } from '../domain/audit.js';
+import { type AuditAction, type AuditArea } from '../domain/audit.js';
 import { type CheckErrorType, type CheckStatus, type StatsRange } from '../domain/check.js';
-import { type IncidentStatus, type IncidentType } from '../domain/incident.js';
+import {
+  type IncidentCategory,
+  type IncidentSeverity,
+  type IncidentStatus,
+  type IncidentType,
+} from '../domain/incident.js';
 import {
   type NotificationChannel,
   type NotificationEvent,
   type NotificationPreferences,
   type NotificationStatus,
 } from '../domain/notification.js';
-import { type Plan } from '../domain/plan.js';
+import { type Plan, type PlanFeature, type PlanLimits } from '../domain/plan.js';
 import { type OrganizationRole } from '../domain/roles.js';
 import { type Permission } from '../domain/permissions.js';
 import { type WebsiteStatus } from '../domain/website.js';
@@ -36,6 +41,34 @@ export interface OrganizationDto {
   readonly timezone: string;
   readonly websiteCount: number;
   readonly createdAt: string;
+}
+
+/**
+ * What the current organization's plan allows, resolved server-side.
+ *
+ * Sent to the dashboard so it can explain a locked feature instead of failing a
+ * request the user could not have known would be refused. It is never the
+ * enforcement: every one of these is re-checked on the request itself.
+ */
+export interface EntitlementsDto {
+  readonly plan: Plan;
+  readonly features: readonly PlanFeature[];
+  readonly limits: PlanLimits;
+  readonly usage: PlanUsageDto;
+}
+
+/** Current consumption against the countable limits. */
+export interface PlanUsageDto {
+  readonly websites: number;
+  readonly members: number;
+  readonly clients: number;
+  readonly statusPages: number;
+  readonly apiKeys: number;
+  readonly integrations: number;
+  readonly reportSchedules: number;
+  readonly customDomains: number;
+  readonly apiRequestsToday: number;
+  readonly aiGenerationsThisMonth: number;
 }
 
 export interface OrganizationMembershipDto {
@@ -122,6 +155,10 @@ export interface IncidentDto {
   readonly websiteUrl: string;
   readonly status: IncidentStatus;
   readonly type: IncidentType;
+  readonly category: IncidentCategory;
+  readonly severity: IncidentSeverity;
+  /** Set by a monitor that raised this incident; null for uptime failures. */
+  readonly detail: string | null;
   readonly startedAt: string;
   readonly resolvedAt: string | null;
   readonly durationSeconds: number | null;
@@ -152,10 +189,25 @@ export interface NotificationSettingsDto {
 export interface AuditLogDto {
   readonly id: string;
   readonly action: AuditAction;
+  readonly area: AuditArea;
   readonly actorId: string | null;
   readonly actorName: string;
+  readonly targetType: string | null;
+  readonly targetId: string | null;
   readonly targetLabel: string | null;
   readonly createdAt: string;
+}
+
+/**
+ * The distinct actors that appear in an organization's audit log.
+ *
+ * Sent alongside the first page so the actor filter can be populated without a
+ * second round trip, and without the client having to derive it from whichever
+ * page happens to be loaded.
+ */
+export interface AuditActorDto {
+  readonly id: string | null;
+  readonly name: string;
 }
 
 export interface DashboardStatsDto {

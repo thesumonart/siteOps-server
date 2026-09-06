@@ -113,6 +113,18 @@ export class MembershipRepository {
     return (await OrganizationMemberModel.exists({ organizationId, userId })) !== null;
   }
 
+  /**
+   * Accepted members, for the plan's team-size limit.
+   *
+   * Pending invitations are deliberately not counted: an invitation that is
+   * never accepted would otherwise occupy a seat forever. The limit is
+   * re-checked when the invitation is accepted, which is the moment a seat is
+   * actually taken.
+   */
+  async countForOrganization(organizationId: Types.ObjectId): Promise<number> {
+    return OrganizationMemberModel.countDocuments({ organizationId }).exec();
+  }
+
   /** Used to refuse the removal or demotion of the last owner. */
   async countOwners(organizationId: Types.ObjectId): Promise<number> {
     return OrganizationMemberModel.countDocuments({ organizationId, role: 'owner' }).exec();
