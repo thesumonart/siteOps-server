@@ -12,6 +12,13 @@ coverage/
 .env
 .env.*
 !.env.example
+.env.prod
+
+# Deployment guides and generated audit docs (keep README.md and CLAUDE.md)
+PRODUCTION-ENV.md
+SITEOPS-PRODUCTION-AUDIT.md
+SITEOPS-PRODUCTION-FEATURE-AUDIT.md
+SITEOPS-RENDER-DEPLOYMENT-AUDIT.md
 
 # Logs
 *.log
