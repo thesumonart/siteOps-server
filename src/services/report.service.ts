@@ -136,10 +136,11 @@ export class ReportService {
   async dashboardStats(organization: OrganizationContext): Promise<DashboardStatsDto> {
     const since = windowStart('24h', new Date());
 
-    const [byStatus, totalsByWebsite, openIncidents] = await Promise.all([
+    const [byStatus, totalsByWebsite, openIncidents, freshness] = await Promise.all([
       this.websites.countByStatus(organization.objectId),
       this.checks.totalsByWebsite(organization.objectId, since),
       this.incidents.countOpen(organization.objectId),
+      this.websites.monitoringFreshness(organization.objectId),
     ]);
 
     const combined = combineTotals([...totalsByWebsite.values()]);
@@ -157,6 +158,14 @@ export class ReportService {
       ),
       averageResponseTimeMs24h: combined.averageResponseTimeMs,
       openIncidents,
+      /*
+       * Sent so the dashboard can say whether the figures above are current.
+       * Every one of them is a snapshot the worker last wrote, and when the
+       * worker stopped they kept reading "100% uptime, operational" — true of
+       * yesterday, and shown as though it were true now.
+       */
+      lastCheckAt: freshness.lastCheckAt?.toISOString() ?? null,
+      shortestIntervalSeconds: freshness.shortestIntervalSeconds,
     };
   }
 

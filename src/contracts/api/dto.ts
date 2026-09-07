@@ -453,6 +453,25 @@ export interface DashboardStatsDto {
   readonly averageUptimePercentage24h: number | null;
   readonly averageResponseTimeMs24h: number | null;
   readonly openIncidents: number;
+
+  /**
+   * The most recent check across this organization's websites, and the shortest
+   * interval any of them is configured for.
+   *
+   * Together they let the dashboard answer a question it previously could not:
+   * *is any of this current?* Every other number here is a snapshot the worker
+   * last wrote, and when the worker stopped they went on reading "100% uptime,
+   * operational" for eighteen hours — accurate about the past, and presented as
+   * the present.
+   *
+   * Deliberately about this tenant's own monitoring rather than about the
+   * infrastructure: it names no host, no process and no queue. Whether the
+   * worker is healthy is an operator question and lives behind
+   * `/api/internal/monitoring/health`.
+   */
+  readonly lastCheckAt: string | null;
+  /** Null when nothing is being monitored. Seconds. */
+  readonly shortestIntervalSeconds: number | null;
 }
 
 /**

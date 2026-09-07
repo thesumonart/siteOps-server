@@ -137,6 +137,53 @@ export class WebsiteRepository {
     return new Map(rows.map((row) => [row._id, row.count]));
   }
 
+  /**
+   * How current this organization's monitoring data is.
+   *
+   * `lastCheckAt` is the newest check across every actively monitored website,
+   * and `shortestIntervalSeconds` the tightest cadence any of them is set to.
+   * The dashboard compares the two to decide whether the figures it is about to
+   * render are live or a snapshot of a worker that has stopped.
+   *
+   * Paused websites are excluded from both. A site somebody deliberately paused
+   * has an old `lastCheckedAt` by design, and letting it drag the maximum down
+   * would make a healthy deployment look stalled.
+   *
+   * One aggregation rather than two queries: both figures come from the same
+   * documents and the dashboard needs them together or not at all.
+   */
+  async monitoringFreshness(
+    organizationId: Types.ObjectId,
+    clientScope?: Types.ObjectId | null,
+  ): Promise<{
+    readonly lastCheckAt: Date | null;
+    readonly shortestIntervalSeconds: number | null;
+  }> {
+    const match: Record<string, unknown> = { organizationId, monitoringEnabled: true };
+    if (clientScope) match.clientId = clientScope;
+
+    const rows = await WebsiteModel.aggregate<{
+      _id: null;
+      lastCheckAt: Date | null;
+      shortestIntervalSeconds: number | null;
+    }>([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          lastCheckAt: { $max: '$lastCheckedAt' },
+          shortestIntervalSeconds: { $min: '$monitoringIntervalSeconds' },
+        },
+      },
+    ]).exec();
+
+    const row = rows[0];
+    return {
+      lastCheckAt: row?.lastCheckAt ?? null,
+      shortestIntervalSeconds: row?.shortestIntervalSeconds ?? null,
+    };
+  }
+
   async create(input: {
     readonly organizationId: Types.ObjectId;
     readonly name: string;
