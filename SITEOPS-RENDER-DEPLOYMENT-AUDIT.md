@@ -33,6 +33,18 @@ fails its health check, so `https://siteops-server.onrender.com` stayed up on th
 throughout — confirmed by a continuously rising `uptimeSeconds` and the continued absence of an HSTS
 header.
 
+**Resolved.** `NODE_ENV=production` was set and the deploy went through. The API now answers with
+`Strict-Transport-Security: max-age=31536000; includeSubDomains`, `/health/ready` reports
+`database: ok`, and the session cookie is issued as it always should have been:
+
+```text
+Set-Cookie: __Secure-siteops.session_token=…; Max-Age=2592000; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+The `__Secure-` prefix is the visible proof that production mode is active. The dashboard's routing
+middleware already matched it — `/^(?:__Secure-)?siteops\.session_token$/` — so the rename cost
+nobody their session.
+
 ### Why the message looked empty
 
 The formatting code was not at fault. Reproduced against the compiled schema, every failure mode
@@ -211,49 +223,61 @@ organization with its first membership; they were run against one.
 
 ### Browser verification against the live deployment
 
-| Step                                    | Result                                                                             |
-| --------------------------------------- | ---------------------------------------------------------------------------------- |
-| Landing page                            | 200, renders                                                                       |
-| Login page                              | 200                                                                                |
-| Sign in                                 | `POST /api/auth/sign-in/email` → `200`, same-origin                                |
-| Cookie stored                           | `siteops.session_token` on `siteops-client.vercel.app`, `HttpOnly`, `SameSite=Lax` |
-| Redirect                                | → `/dashboard`                                                                     |
-| Dashboard                               | Real data: 2 websites, 502 ms, 0 open incidents                                    |
-| Refresh                                 | Stays signed in                                                                    |
-| Websites / profile / settings / billing | All load                                                                           |
-| Sign out                                | → `/login`, session cookie removed                                                 |
-| Dashboard when signed out               | → `/login?next=%2Fdashboard`                                                       |
-| Re-login                                | → `/dashboard`                                                                     |
+Re-run after the successful deploy, so the cookie below is the production one.
+
+| Step                                                          | Result                                                                                                |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Landing page                                                  | 200, renders                                                                                          |
+| Login page                                                    | 200                                                                                                   |
+| Sign in                                                       | `POST /api/auth/sign-in/email` → `200`, same-origin                                                   |
+| Cookie stored                                                 | `__Secure-siteops.session_token` on `siteops-client.vercel.app`, `HttpOnly`, `Secure`, `SameSite=Lax` |
+| Redirect                                                      | → `/dashboard`                                                                                        |
+| Dashboard                                                     | Real data: 2 websites, 0 open incidents. No console errors; every API call `200`.                     |
+| Refresh                                                       | Stays signed in                                                                                       |
+| Websites / profile / settings / billing / incidents / reports | All load                                                                                              |
+| Sign out                                                      | → `/login`, session cookie removed                                                                    |
+| Dashboard when signed out                                     | → `/login?next=%2Fdashboard`                                                                          |
+| Re-login                                                      | → `/dashboard`                                                                                        |
 
 ---
 
 ## Final status
 
-| Area                   | Status                                                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Render                 | **BLOCKED** — live service healthy on the pre-fix process; the new deploy will not start until `NODE_ENV=production` is set |
-| Vercel                 | PASS                                                                                                                        |
-| Environment validation | PASS — `.env.prod` validated and booted locally; error message fixed                                                        |
-| MongoDB                | PASS — `/health/ready` reports `database: ok`                                                                               |
-| Authentication         | PASS                                                                                                                        |
-| Login                  | PASS                                                                                                                        |
-| Dashboard              | PASS                                                                                                                        |
-| Worker                 | **FAIL** — not running in production; boots correctly from this configuration                                               |
-| Monitoring             | **FAIL** — no checks recorded for 12.5 hours; consequence of the worker                                                     |
-| Notifications          | **UNVERIFIED** — mail provider configured, but no incident has occurred to send one, and none can while the worker is down  |
-| Git hygiene            | PASS — one real ignore gap found and fixed, no secrets in history                                                           |
-| Build                  | PASS                                                                                                                        |
-| Tests                  | PASS — 824 server, 203 client, 32 end-to-end                                                                                |
+Verified against the live deployment after `NODE_ENV=production` was set.
+
+| Area                   | Status                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| Render                 | PASS — deploy succeeded, HSTS present, production mode confirmed                        |
+| Vercel                 | PASS                                                                                    |
+| Environment validation | PASS — starts cleanly; the failure message now names the offending variable             |
+| MongoDB                | PASS — `/health/ready` reports `database: ok`                                           |
+| Authentication         | PASS — cookie is `__Secure-…`, `HttpOnly`, `Secure`, `SameSite=Lax`                     |
+| Login                  | PASS — redirects to `/dashboard`                                                        |
+| Dashboard              | PASS — loads, survives refresh, all protected routes hold                               |
+| Logout / re-login      | PASS — session revoked, dashboard re-protected, signing in again works                  |
+| Worker                 | **FAIL** — still not running; boots correctly from this configuration                   |
+| Monitoring             | **FAIL** — no checks recorded for 13 hours; a consequence of the worker                 |
+| Notifications          | **UNVERIFIED** — provider configured, but no alert can be sent while the worker is down |
+| Rate-limit attribution | **UNVERIFIED** — `TRUST_PROXY` cannot be read from outside; see below                   |
+| Git hygiene            | PASS — one real ignore gap found and fixed, no secrets in history                       |
+| Build                  | PASS                                                                                    |
+| Tests                  | PASS — 824 server, 203 client, 32 end-to-end                                            |
 
 ### Outstanding actions
 
-1. **Set `NODE_ENV=production` on Render.** This unblocks the deploy. Confirm `RESEND_API_KEY` is
-   also set, because it becomes required at the same moment.
-2. **Set `TRUST_PROXY=true`.** Without it every request is attributed to the platform's address and
-   the whole deployment shares one rate-limit budget — `ratelimit-limit: 10` for all users combined.
-3. **Get the monitoring worker running.** Measured directly against the database: the most recent
-   check is `2026-09-06T19:30:22Z`, twelve and a half hours before this audit, on websites configured
-   for five-minute checks. The dashboard reports "100.00% uptime, 0 open incidents" from data that
-   stopped arriving overnight — an outage now would not be detected and no alert would be sent. The
-   likely cause is Render's free tier idling a service that takes no inbound traffic.
-4. **Point local development at a local database.** `pnpm docker:up` provides the replica set.
+1. **Get the monitoring worker running.** This is now the only thing standing between the deployment
+   and a working product. Measured directly against the database, the most recent check is
+   `2026-09-06T19:30:22Z` — thirteen hours before this audit — on websites configured for five-minute
+   checks. The dashboard reports "100.00% uptime, 0 open incidents" from data that stopped arriving
+   overnight, so an outage now would not be detected and no alert would be sent. The worker boots
+   correctly from `.env.prod`, which was verified, so this is a platform question: confirm a second
+   Render service exists running `node dist/worker.js`, sharing the API's environment, on a plan that
+   does not idle a service with no inbound traffic.
+2. **Confirm `TRUST_PROXY=true` is set.** It cannot be observed from outside. Without it every
+   request is attributed to the platform's address and the whole deployment shares one rate-limit
+   budget — during this audit `ratelimit-limit: 10` was exhausted by a single person. Note that
+   correct attribution also depends on `X-Forwarded-For` surviving Vercel, Cloudflare and Render's
+   own proxy, and on `trust proxy` being the right hop count (`src/app.ts` uses `1`); that chain
+   should be checked against real traffic before the limits are relied on for abuse prevention.
+3. **Point local development at a local database.** The development `.env` currently targets the
+   production cluster. `pnpm docker:up` provides the replica set it needs.
