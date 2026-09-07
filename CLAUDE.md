@@ -35,6 +35,14 @@ Version choices that are deliberate and must not be "upgraded" casually:
   lease. See `docs/ARCHITECTURE.md` for the full reasoning; the short version is that adding a
   broker means a second required service _and_ a second idempotency mechanism competing with the
   unique indexes that already provide one.
+- **Two ways to host the monitoring loops, one implementation.** `MonitoringRuntime` is built by
+  both `worker.ts` and — when `MONITORING_RUNTIME=inline` — `server.ts`. A dedicated worker is
+  still the default and still the better architecture; `inline` exists because a plan with one
+  long-running service otherwise runs no monitoring at all, silently, which is how this product
+  shipped. Never fork the loops per host: the queues, leases and jobs must stay identical.
+- **The Public Suffix List and IANA's RDAP bootstrap are fetched, not bundled.** Both are cached
+  for a day and both degrade rather than fail. A committed copy is stale the day after it lands, and
+  a TLD delegated next month then looks like a lookup failure rather than a stale file.
 - **Rate limiting is hand-written** in `src/utils/rate-limiter.ts`. Simple enough not to warrant a
   dependency; the interface is one `consume` call.
 - **No Stripe SDK.** `src/billing/stripe-provider.ts` calls four REST endpoints with `undici` and
@@ -60,7 +68,8 @@ src/responses/      The envelope
 src/billing/        Payment provider interface, Stripe adapter, price catalogue
 src/monitoring/     SSRF guards, checker, incident rules
 src/queues/         The MongoDB-backed work queue
-src/jobs/           Scheduler loop, per-website job
+src/jobs/           Scheduler loops, per-website job, the monitoring runtime
+cloudflare/         Cron Worker that drives the tick on single-service hosting
 src/email/          Provider and templates
 src/database/       Connection, index sync and verification
 tests/              Integration tests and shared support
@@ -129,7 +138,11 @@ These are not style preferences.
 5. **Errors.** Never return a stack trace, driver error or internal path to a client.
 6. **Auth.** Never hand-roll password hashing or session management. That is Better Auth's job.
 7. **`MONITOR_ALLOW_PRIVATE_ADDRESSES`** exists for tests only and is refused in production.
-8. **Billing.** `organization.plan` is written by exactly one code path: the webhook handler, after
+8. **`/api/internal`.** Operator-only, behind `INTERNAL_API_KEY`, compared with `timingSafeEqual`.
+   Unset means refused, never open: an endpoint that forces work is a DoS amplifier and one that
+   reports queue depth is reconnaissance. Never put tenant data behind this key, and never put an
+   operator endpoint behind a session.
+9. **Billing.** `organization.plan` is written by exactly one code path: the webhook handler, after
    a signature verifies. No route sets it, and no request carries a price — a checkout names a plan
    and the price id is resolved server-side. Never add an endpoint that changes a plan directly,
    and never trust the browser's return from checkout as evidence of payment.
@@ -163,6 +176,11 @@ is broken, not that a test is stale.
 - One notification per incident transition. Never repeat while a site stays down.
 - Uptime is floored, never rounded up. Response-time statistics exclude failed checks.
 - No magic numbers. Monitoring parameters are environment variables validated at startup.
+- A monitoring process that stops must be **visible**. It was not, once, and websites went unchecked
+  for eighteen hours behind entirely green health probes. `worker_heartbeats` and the freshness
+  banner exist for that; neither may be removed without something better replacing it.
+- A stored countdown is the value at check time, not now. Anything shown as "days remaining" is
+  derived from the expiry date at render, or the display drifts silently once checks stop.
 
 ## Git
 

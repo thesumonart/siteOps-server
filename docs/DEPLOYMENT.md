@@ -1,6 +1,13 @@
 # Deployment
 
-Two processes and a database. Both processes build from this repository and share one `.env`.
+Two processes and a database, in the default arrangement. Both build from this repository and share
+one `.env`.
+
+There is a second arrangement for hosting that offers only one long-running service — see
+[Single-service deployments](#single-service-deployments). Read that section before deploying to a
+free tier of anything: the default arrangement silently runs **no monitoring at all** there, which
+is not a hypothetical. It is what SiteOps shipped, and websites went unchecked for eighteen hours
+behind a completely green set of health probes.
 
 ```text
        siteOps-client (Vercel, Netlify, …)
@@ -68,6 +75,98 @@ rather than letting it run misconfigured. `.env.example` is the full list with c
 
 `MONITOR_ALLOW_PRIVATE_ADDRESSES` must never be set in production. The schema refuses to start if
 it is.
+
+### Monitoring runtime
+
+| Variable             | Default    | Notes                                                                         |
+| -------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `MONITORING_RUNTIME` | `separate` | `separate` = dedicated worker process. `inline` = the API runs the loops too. |
+| `INTERNAL_API_KEY`   | —          | Bearer token for `/api/internal`. Unset means those endpoints are refused.    |
+
+Set exactly one host for the loops. Two would not corrupt anything — every claim is an atomic lease
+— but it doubles the connection pool and the outbound socket budget for no extra throughput.
+
+---
+
+## Single-service deployments
+
+Render's Background Workers, Fly's non-HTTP processes and their equivalents are paid features. On a
+plan that gives you one web service, `node dist/worker.js` has nowhere to run, and the default
+configuration answers every health check while checking no websites.
+
+Two things are needed, and neither is optional.
+
+### 1. Run the loops inside the API
+
+```bash
+MONITORING_RUNTIME=inline
+```
+
+The API process now starts the same three scheduler loops the worker would have. The queues, the
+leases, the jobs and the incident rules are identical; only the event loop they share differs.
+
+### 2. Give it an external clock
+
+A suspended process runs no timers. A platform that sleeps an idle service will happily sleep one
+whose only remaining work is a `setTimeout`, and an in-process loop cannot wake itself — so
+`inline` on its own gets you monitoring that stops the moment traffic does.
+
+`cloudflare/` is a Cloudflare Worker that fixes this. Once a minute a cron trigger makes one
+authenticated request to `POST /api/internal/monitoring/tick`, which both wakes the instance and
+runs a sweep immediately rather than letting it return a 200 and fall asleep before its own next
+tick.
+
+```bash
+cd cloudflare
+npx wrangler secret put INTERNAL_API_KEY   # the same value the API has
+npx wrangler deploy
+```
+
+Set `SITEOPS_API_URL` in `cloudflare/wrangler.toml` to the API origin. Cloudflare's cron triggers
+are free on the Workers free plan, and one request a minute is 43,200 a month against a 100,000/day
+allowance.
+
+**The Worker does not perform monitoring, and cannot.** Inspecting a certificate needs a raw TLS
+handshake with the peer certificate read back off the socket (`node:tls`), the SSRF guard needs to
+resolve a hostname and classify the address before connecting (`node:dns`), and results go to
+MongoDB over a TCP driver connection. None of the three exist in the Workers runtime. Moving the
+checks there would mean deleting certificate inspection and the SSRF guard, so the checks stay on
+Node and Cloudflare is only the clock.
+
+### Verifying it works
+
+```bash
+curl -s -H "Authorization: Bearer $INTERNAL_API_KEY"   https://your-api/api/internal/monitoring/health
+```
+
+```json
+{
+  "status": "running",
+  "heartbeatAgeSeconds": 23,
+  "host": "api",
+  "pendingChecks": 0,
+  "overdueChecks": 0,
+  "failedChecksLast24h": 3,
+  "lastCheckRecordedAt": "..."
+}
+```
+
+`status` is derived from the newest heartbeat, not self-reported by the process answering:
+
+| Status          | Meaning                                                        |
+| --------------- | -------------------------------------------------------------- |
+| `running`       | A heartbeat within the last two minutes.                       |
+| `degraded`      | Two to ten minutes. A slow database, or a restart in progress. |
+| `stopped`       | Over ten minutes. Nothing is checking anything.                |
+| `never_started` | No runtime has ever written a heartbeat on this deployment.    |
+
+`overdueChecks` is the number that matters most: websites due for more than five minutes with
+nothing claiming them. A non-zero value that stays non-zero means the loops are not draining the
+queue, whatever the process says about itself.
+
+Customers see a plainer version of the same fact — the dashboard raises a banner when the newest
+check across their websites is older than three times their shortest configured interval. That
+banner names nothing about the infrastructure; it just refuses to present stale figures as current.
 
 ## Database
 

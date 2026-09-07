@@ -218,6 +218,25 @@ attempt the insert and exactly one wins, with no window a `findOne`-then-`insert
 The claim is released if processing then throws, so a transient database failure does not turn the
 provider's retry into a silently dropped subscription change.
 
+### `worker_heartbeats`
+
+Proof that a monitoring runtime is alive, written by the runtime itself. One document per process
+instance rather than one shared row: two instances during a rolling deploy are normal and both are
+healthy, and collapsing them onto one row would let a departing instance's last write look like the
+survivor's.
+
+Nothing here is tenant-scoped and nothing is shown to a customer. It exists because the monitoring
+worker stopped in production and nothing said so — the dashboard went on reporting 100% uptime from
+data eighteen hours old, which is worse than an outage because an outage is visible.
+
+| Index                              | Query                                                               |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `worker_heartbeat_instance_unique` | The upsert key. Unique, so one process cannot become two documents. |
+| `worker_heartbeat_recent`          | "The newest heartbeat", descending. Carries the TTL.                |
+
+The TTL is seven days on `lastHeartbeatAt`, not on creation: a worker dead since Friday must still
+be visibly dead on Monday, while a long-lived healthy instance is never reaped mid-write.
+
 ### Auth collections
 
 Better Auth creates its documents but not its indexes, and its uniqueness checks are read-then-write
