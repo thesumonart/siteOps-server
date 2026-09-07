@@ -1,5 +1,6 @@
 import { interceptors, request, Agent } from 'undici';
 
+import { loadRdapBootstrap } from './reference-data.js';
 import type {
   DomainLookupOptions,
   DomainLookupResult,
@@ -14,16 +15,31 @@ import type {
  * per registrar. It is tried first for exactly that reason — the dates it
  * returns are unambiguous, where WHOIS dates have to be guessed at.
  *
- * The default endpoint is `rdap.org`, IANA's bootstrap redirector: it looks the
- * TLD up in the official registry and redirects to the authoritative server.
- * That means one URL instead of a bootstrap file to keep current, at the cost
- * of a dependency on a third party — which is why the base URL is configurable
- * and why this sits behind {@link DomainRegistrationProvider}.
+ * **Which server is asked** comes from IANA's own bootstrap registry, cached
+ * for a day: `.dev` resolves to Google's registry, `.uk` to Nominet, and the
+ * query goes straight there. `rdap.org` — a third-party redirector — is kept
+ * only as the fallback for when that registry cannot be fetched or does not
+ * list the TLD. It used to be the primary path, and that was the wrong shape:
+ * a single volunteer-run host in front of every lookup is one outage away from
+ * every domain in the product reporting "expiry unknown".
  */
 
-const DEFAULT_BASE_URL = 'https://rdap.org';
+const FALLBACK_BASE_URL = 'https://rdap.org';
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 5;
+
+/**
+ * Sent on every request, and not optional.
+ *
+ * `rdap.org` sits behind Cloudflare, which answers a request with no
+ * `User-Agent` with an HTTP 403 challenge page. The provider read that as
+ * "this TLD has no RDAP service", fell through to WHOIS, and every `.dev`
+ * domain in production ended up reporting "No WHOIS server is published for
+ * this TLD" — with no expiry date, indefinitely. Several registries apply the
+ * same rule, so identifying ourselves is a correctness requirement rather than
+ * politeness.
+ */
+const USER_AGENT = 'SiteOpsMonitor/1.0 (+https://siteops.app)';
 
 /**
  * Follows the bootstrap redirect to the authoritative registry.
@@ -117,13 +133,33 @@ function registrarName(entities: readonly unknown[]): string | null {
 }
 
 export interface RdapProviderOptions {
-  /** Base URL of an RDAP server or bootstrap redirector. */
+  /**
+   * Pins the RDAP server, skipping the bootstrap lookup.
+   *
+   * Set by tests against a local server. A deployment leaves it unset so IANA
+   * decides, which is the only way a TLD delegated next month works without a
+   * code change.
+   */
   readonly baseUrl?: string;
 }
 
-export function createRdapProvider(options: RdapProviderOptions = {}): DomainRegistrationProvider {
-  const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+/**
+ * The authoritative RDAP base URL for a domain's TLD.
+ *
+ * Falls back to the redirector when the bootstrap registry is unavailable or
+ * does not list the TLD — plenty of ccTLDs are absent from it, and `rdap.org`
+ * knows about some of them.
+ */
+async function resolveBaseUrl(domain: string, pinned: string | undefined): Promise<string> {
+  if (pinned) return pinned.replace(/\/$/, '');
 
+  const tld = domain.slice(domain.lastIndexOf('.') + 1).toLowerCase();
+  const bootstrap = await loadRdapBootstrap();
+
+  return bootstrap?.get(tld) ?? FALLBACK_BASE_URL;
+}
+
+export function createRdapProvider(options: RdapProviderOptions = {}): DomainRegistrationProvider {
   return {
     name: 'rdap',
 
@@ -134,23 +170,54 @@ export function createRdapProvider(options: RdapProviderOptions = {}): DomainReg
       }, lookupOptions.timeoutMs);
 
       try {
+        const baseUrl = await resolveBaseUrl(domain, options.baseUrl);
+
         const response = await request(`${baseUrl}/domain/${encodeURIComponent(domain)}`, {
           method: 'GET',
           signal: controller.signal,
-          // The bootstrap endpoint answers with a 302 to the authoritative
-          // registry, so redirects have to be followed to get an answer at all.
-          // Bounded, because a redirect loop between two registries would
-          // otherwise spin until the timeout.
+          // Registries redirect between their own hosts, and the fallback
+          // redirector answers with a 302 to the authoritative one, so
+          // redirects have to be followed to get an answer at all. Bounded,
+          // because a loop between two registries would otherwise spin until
+          // the timeout.
           dispatcher: redirectingAgent,
-          headers: { accept: 'application/rdap+json, application/json' },
+          headers: {
+            accept: 'application/rdap+json, application/json',
+            'user-agent': USER_AGENT,
+          },
         });
 
         if (response.statusCode === 404) {
           await response.body.dump();
-          return { outcome: 'not_found' };
+          /*
+           * What a 404 means depends on who answered.
+           *
+           * From the registry IANA names as authoritative, it is the answer:
+           * this name is not registered. From the fallback redirector, it much
+           * more often means "no RDAP service is published for this TLD" — the
+           * response body says exactly that — and reporting it as "not
+           * registered" would let the chain stop instead of trying WHOIS.
+           */
+          return baseUrl === FALLBACK_BASE_URL
+            ? {
+                outcome: 'unsupported',
+                reason: 'No RDAP service is published for this TLD.',
+              }
+            : { outcome: 'not_found' };
         }
 
-        if (response.statusCode === 429 || response.statusCode >= 500) {
+        /*
+         * 403 belongs here, not below. A registry or its CDN refusing us is a
+         * transient, fixable condition — and classifying it as `unsupported`
+         * is precisely the bug that hid every `.dev` expiry date: the chain
+         * moved on to WHOIS, WHOIS had no server for the TLD, and the honest
+         * "we were blocked" became a permanent-sounding "this TLD has none".
+         */
+        if (
+          response.statusCode === 403 ||
+          response.statusCode === 429 ||
+          response.statusCode >= 500
+        ) {
           await response.body.dump();
           // Transient by definition. Reporting this as "no expiry known" would
           // clear a warning that is still true.

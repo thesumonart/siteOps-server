@@ -1,8 +1,9 @@
 import { Types } from 'mongoose';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DomainCheckData, MonitorConfig } from '../../contracts/index.js';
 import type { ClaimedMonitor } from '../../queues/monitor.queue.js';
+import { parsePublicSuffixList, seedPublicSuffixRules } from '../domain/reference-data.js';
 import type {
   DomainLookupResult,
   DomainRegistrationProvider,
@@ -20,6 +21,28 @@ import { createDomainRunner } from './domain.runner.js';
  */
 
 const NOW = new Date('2026-01-01T00:00:00Z');
+
+/**
+ * A miniature Public Suffix List, seeded so no test reaches the network.
+ *
+ * Written in the real file's format and parsed by the real parser, so the
+ * section markers and rule syntax are exercised rather than assumed.
+ */
+const SUFFIX_FIXTURE = [
+  '// ===BEGIN ICANN DOMAINS===',
+  'com',
+  'uk',
+  'co.uk',
+  'dev',
+  '*.bd',
+  'ck',
+  '*.ck',
+  '!www.ck',
+  '// ===END ICANN DOMAINS===',
+  '// ===BEGIN PRIVATE DOMAINS===',
+  'github.io',
+  '// ===END PRIVATE DOMAINS===',
+].join('\n');
 
 function provider(result: DomainLookupResult): DomainRegistrationProvider {
   return { name: 'test', lookup: () => Promise.resolve(result) };
@@ -71,6 +94,16 @@ function dataOf(result: { data: unknown }): DomainCheckData {
 }
 
 describe('domain runner', () => {
+  beforeEach(() => {
+    seedPublicSuffixRules(parsePublicSuffixList(SUFFIX_FIXTURE));
+  });
+
+  afterEach(() => {
+    // Left seeded as null rather than cleared: an unseeded cache would let a
+    // later test silently fetch the real list over the network.
+    seedPublicSuffixRules(null);
+  });
+
   it('passes a registration comfortably in the future', async () => {
     const runner = createDomainRunner({ providers: [provider(found('2027-06-01T00:00:00Z'))] });
 
@@ -134,12 +167,31 @@ describe('domain runner', () => {
     expect(result.errorMessage).toContain('timed out');
   });
 
-  it('reports an unregistered name as an error rather than as expiring', async () => {
+  it('reports an unregistered name as failing, with its own wording', async () => {
     const runner = createDomainRunner({ providers: [provider({ outcome: 'not_found' })] });
 
     const result = await runner.run(context());
 
+    /*
+     * Every registry that answered agreed the name is not registered. For a
+     * site someone is actively monitoring that is the most serious verdict this
+     * monitor has — it is not "we could not find out", and filing it under
+     * `error` would bury it among transient registry outages.
+     */
+    expect(result.status).toBe('failing');
+    expect(result.summary).toContain('not registered');
+    expect(result.findings.some((finding) => finding.code === 'domain.not_registered')).toBe(true);
+  });
+
+  it('keeps a genuine lookup failure distinct from an unregistered name', async () => {
+    const runner = createDomainRunner({
+      providers: [provider({ outcome: 'unsupported', reason: 'No RDAP service for this TLD.' })],
+    });
+
+    const result = await runner.run(context());
+
     expect(result.status).toBe('error');
+    expect(result.errorMessage).toContain('No RDAP service');
   });
 
   it('warns when the registry publishes no expiry date at all', async () => {
@@ -188,12 +240,63 @@ describe('domain runner', () => {
     expect(result.errorMessage).toContain('not a registrable domain');
   });
 
-  it('walks up to the registrable domain when the shorter name is not registered', async () => {
+  it('asks for the registrable domain directly, and only that', async () => {
+    const asked = recordingProvider();
+    const runner = createDomainRunner({ providers: [asked.provider] });
+    const base = context();
+    const monitor = { ...base.monitor, websiteUrl: 'https://shop.example.co.uk/' };
+
+    const result = await runner.run({ ...base, monitor });
+
+    expect(result.status).toBe('passing');
+    // One request, and it names the right thing. `co.uk` is never asked about,
+    // because the suffix list already knows it is a suffix — which matters:
+    // Nominet answers HTTP 200 for `co.uk` with a registrar and no expiry, so
+    // asking would produce a confident wrong answer rather than a miss.
+    expect(asked.domains).toEqual(['example.co.uk']);
+  });
+
+  it('keeps a multi-level ccTLD whole', async () => {
+    const asked = recordingProvider();
+    const runner = createDomainRunner({ providers: [asked.provider] });
+    const base = context();
+    const monitor = { ...base.monitor, websiteUrl: 'https://www.shop.example.com.bd/' };
+
+    await runner.run({ ...base, monitor });
+
+    // `*.bd` makes `com.bd` the suffix, so the registrable name is three
+    // labels — not the last two.
+    expect(asked.domains).toEqual(['example.com.bd']);
+  });
+
+  it('falls back to walking labels when the suffix list is unavailable', async () => {
+    seedPublicSuffixRules(null);
+
     const asked: string[] = [];
     const walking: DomainRegistrationProvider = {
       name: 'walking',
       lookup: (domain) => {
         asked.push(domain);
+        /*
+         * Reproduces what Nominet actually returns: `co.uk` is a real RDAP
+         * object with a registrar and no dates. Believing it is the bug this
+         * fallback has to survive, so the runner must keep walking and settle
+         * on the dated answer.
+         */
+        if (domain === 'co.uk') {
+          return Promise.resolve<DomainLookupResult>({
+            outcome: 'found',
+            registration: {
+              domain: 'co.uk',
+              registrar: 'Nominet UK',
+              registeredAt: null,
+              expiresAt: null,
+              statuses: [],
+              nameServers: [],
+              source: 'test',
+            },
+          });
+        }
         return Promise.resolve(
           domain === 'example.co.uk' ? found('2027-06-01T00:00:00Z') : { outcome: 'not_found' },
         );
@@ -206,9 +309,27 @@ describe('domain runner', () => {
 
     const result = await runner.run({ ...base, monitor });
 
-    expect(result.status).toBe('passing');
-    // `co.uk` is asked first and refused by the registry, which is exactly what
-    // stands in for a public suffix list.
     expect(asked).toEqual(['co.uk', 'example.co.uk']);
+    expect(result.status).toBe('passing');
+    expect(dataOf(result).domain).toBe('example.com');
+    expect(dataOf(result).expiresAt).not.toBeNull();
   });
 });
+
+/** A provider that records what it was asked and always answers. */
+function recordingProvider(): {
+  readonly provider: DomainRegistrationProvider;
+  readonly domains: string[];
+} {
+  const domains: string[] = [];
+  return {
+    domains,
+    provider: {
+      name: 'recording',
+      lookup: (domain) => {
+        domains.push(domain);
+        return Promise.resolve(found('2027-06-01T00:00:00Z'));
+      },
+    },
+  };
+}

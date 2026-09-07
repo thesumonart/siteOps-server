@@ -8,9 +8,11 @@ import {
   DEFAULT_DOMAIN_WARNING_DAYS,
 } from '../../contracts/index.js';
 import { createRdapProvider } from '../domain/rdap-provider.js';
+import { loadPublicSuffixRules, registrableDomainFrom } from '../domain/reference-data.js';
 import {
   lookupRegistration,
   registrableCandidates,
+  type DomainRegistration,
   type DomainRegistrationProvider,
 } from '../domain/registration-provider.js';
 import { createWhoisProvider } from '../domain/whois-provider.js';
@@ -89,7 +91,7 @@ export function createDomainRunner(options: DomainRunnerOptions = {}): MonitorRu
         });
       }
 
-      const candidates = registrableCandidates(hostname);
+      const candidates = await resolveCandidates(hostname);
       if (candidates.length === 0) {
         return monitorError(`${hostname} is not a registrable domain name.`, {
           type: 'domain',
@@ -98,24 +100,62 @@ export function createDomainRunner(options: DomainRunnerOptions = {}): MonitorRu
       }
 
       /*
-       * Walk the candidates from the shortest (`example.com`) outwards until a
-       * registry recognises one. This is what stands in for a public suffix
-       * list: `www.example.co.uk` fails at `co.uk` (not registrable) and
-       * succeeds at `example.co.uk`, with the registry itself as the authority.
+       * Ask about each candidate until one produces a registration that names
+       * a date. The distinction between "answered" and "answered usefully" is
+       * load-bearing when the suffix list is unavailable: `co.uk` is a real
+       * RDAP object that returns HTTP 200 with Nominet as the registrar and no
+       * expiry at all, so the previous "first 200 wins" rule resolved every
+       * `.co.uk` site to `co.uk` and reported its expiry as unknown.
+       *
+       * A dateless answer is still kept as a fallback, so a registry that
+       * genuinely redacts dates for a real domain is reported as such rather
+       * than as a lookup failure.
        */
-      let lastReason = 'No registry recognised this domain.';
+      let failureReason: string | null = null;
+      let sawNotFound = false;
+      let dateless: DomainRegistration | null = null;
+
       for (const candidate of candidates) {
         const result = await lookupRegistration(providers, candidate, {
           timeoutMs: context.timeoutMs,
         });
 
         if (result.outcome === 'found') {
-          return evaluate(result.registration, config, context.now);
+          if (result.registration.expiresAt ?? result.registration.registeredAt) {
+            return evaluate(result.registration, config, context.now);
+          }
+          dateless ??= result.registration;
+          continue;
         }
-        if (result.outcome !== 'not_found') lastReason = result.reason;
+        if (result.outcome === 'not_found') sawNotFound = true;
+        else failureReason = result.reason;
       }
 
-      return monitorError(lastReason, {
+      if (dateless) return evaluate(dateless, config, context.now);
+
+      /*
+       * Every registry that answered said the name is not registered. For a
+       * website someone is monitoring that is not a lookup failure — it is the
+       * most serious thing this monitor can report, and it needs its own
+       * wording rather than being filed under "we could not find out".
+       */
+      if (sawNotFound && failureReason === null) {
+        return {
+          status: 'failing',
+          summary: 'This domain is not registered.',
+          data: { type: 'domain', ...emptyData(candidates[0] ?? hostname) },
+          findings: [
+            {
+              code: 'domain.not_registered',
+              severity: 'critical',
+              message: 'The registry has no record of this domain.',
+              detail: candidates[0] ?? hostname,
+            },
+          ],
+        };
+      }
+
+      return monitorError(failureReason ?? 'No registry recognised this domain.', {
         type: 'domain',
         ...emptyData(candidates[0] ?? hostname),
       });
@@ -123,16 +163,39 @@ export function createDomainRunner(options: DomainRunnerOptions = {}): MonitorRu
   };
 }
 
+/**
+ * The names worth asking a registry about, best first.
+ *
+ * With the Public Suffix List loaded this is exactly one name and exactly one
+ * request — `www.bbc.co.uk` becomes `bbc.co.uk`, `example.com.bd` stays whole.
+ * The list is fetched and cached rather than bundled, so a TLD delegated after
+ * this was written still resolves correctly.
+ *
+ * When the list cannot be fetched, or has no rule for the TLD, the old
+ * label-walk is the fallback: guessing badly is better than not checking, and
+ * the caller now requires a dated answer, which is what stops the walk
+ * settling on a public suffix.
+ */
+async function resolveCandidates(hostname: string): Promise<readonly string[]> {
+  const rules = await loadPublicSuffixRules();
+
+  if (rules) {
+    const registrable = registrableDomainFrom(hostname, rules);
+    if (registrable) return [registrable];
+
+    /*
+     * The list resolved the name to a public suffix with nothing registrable
+     * under it — `co.uk` on its own, or a bare TLD. There is no domain here to
+     * look up, and walking labels would only find the suffix again.
+     */
+    if (rules.normal.has(hostname.toLowerCase().replace(/\.$/, ''))) return [];
+  }
+
+  return registrableCandidates(hostname);
+}
+
 function evaluate(
-  registration: {
-    readonly domain: string;
-    readonly registrar: string | null;
-    readonly registeredAt: Date | null;
-    readonly expiresAt: Date | null;
-    readonly statuses: readonly string[];
-    readonly nameServers: readonly string[];
-    readonly source: string;
-  },
+  registration: DomainRegistration,
   config: DomainMonitorConfig,
   now: Date,
 ): MonitorRunResult {
