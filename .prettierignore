@@ -3,3 +3,6 @@ dist
 coverage
 pnpm-lock.yaml
 *.tsbuildinfo
+
+# Prettier has no TOML parser; wrangler owns this file's format.
+cloudflare/wrangler.toml

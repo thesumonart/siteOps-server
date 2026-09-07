@@ -96,6 +96,42 @@ export const envSchema = z
 
     /** Probe port. Most platforms treat a worker with no listening port as crashed. */
     WORKER_PORT: z.coerce.number().int().min(1).max(65_535).default(4001),
+
+    /**
+     * Which process runs the monitoring loops.
+     *
+     * `separate` is the default and the better architecture: a dedicated
+     * worker process, so a burst of checks cannot compete with request handling
+     * for the event loop, and either can be restarted without the other.
+     *
+     * `inline` runs the same loops inside the API process. It exists because
+     * several hosting plans offer exactly one long-running service, and on
+     * those the real choice is between running monitoring inside the API and
+     * not running it at all — which is what SiteOps was doing in production,
+     * silently, for eighteen hours.
+     *
+     * Never set both. Two hosts would not corrupt anything — every claim is an
+     * atomic lease — but it doubles the connection pool and the outbound socket
+     * budget for no additional throughput.
+     */
+    MONITORING_RUNTIME: z.enum(['separate', 'inline']).default('separate'),
+
+    /**
+     * Bearer token for the operator endpoints under `/api/internal`.
+     *
+     * Two callers: the external scheduler that drives a tick on a platform
+     * which suspends idle instances, and a human reading worker diagnostics.
+     * Unset means both are refused outright rather than left open — an
+     * unauthenticated endpoint that can force work is a denial-of-service
+     * amplifier, and one that reports queue depth is reconnaissance.
+     *
+     * 32 characters minimum, for the same reason as `AUTH_SECRET`: this is
+     * compared against a value an attacker can submit repeatedly.
+     */
+    INTERNAL_API_KEY: z
+      .string()
+      .min(32, 'INTERNAL_API_KEY must be at least 32 characters.')
+      .optional(),
     /** How often the scheduler looks for websites that are due. */
     MONITOR_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(300).default(15),
     /** Websites checked simultaneously. Bounds outbound sockets and memory. */

@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import { createApp } from './app.js';
 import { env, trustedOrigins } from './config/env.js';
 import { connectToDatabase, disconnectFromDatabase } from './database/connection.js';
+import { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { createLogger, logger } from './utils/logger.js';
 
 const log = createLogger('server');
@@ -25,9 +26,11 @@ const SHUTDOWN_WATCHDOG_MS = 25_000;
 interface RuntimeState {
   shuttingDown: boolean;
   server: Server | null;
+  /** Set only when `MONITORING_RUNTIME=inline`; see the bootstrap below. */
+  monitoring: MonitoringRuntime | null;
 }
 
-const state: RuntimeState = { shuttingDown: false, server: null };
+const state: RuntimeState = { shuttingDown: false, server: null, monitoring: null };
 
 async function shutdown(signal: string, exitCode: number): Promise<void> {
   if (state.shuttingDown) return;
@@ -63,6 +66,11 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
    */
   const failures = [
     await attempt('api.server_close_failed', closeServer),
+    // Before the pool is drained, and only when this process hosts the loops:
+    // a check still in flight needs the connection it is writing through.
+    await attempt('api.monitoring_stop_failed', async () => {
+      await state.monitoring?.stop();
+    }),
     await attempt('api.database_disconnect_failed', disconnectFromDatabase),
   ].filter(Boolean).length;
 
@@ -117,10 +125,33 @@ async function bootstrap(): Promise<void> {
   });
   log.info('database.connected');
 
-  const app = createApp();
+  /*
+   * Monitoring in this process, when the deployment has nowhere else to put it.
+   *
+   * Constructed before `createApp` because the operator tick endpoint needs a
+   * reference to it, and started after the server is listening so a slow first
+   * sweep cannot delay the platform's health check and trigger a restart loop.
+   *
+   * The default remains a dedicated worker process. This exists because a
+   * single-service deployment otherwise runs no monitoring at all, which is
+   * exactly the state this product shipped in.
+   */
+  const monitoring = env.MONITORING_RUNTIME === 'inline' ? new MonitoringRuntime('api') : null;
+  state.monitoring = monitoring;
+
+  const app = createApp({ monitoringRuntime: monitoring });
 
   const server = app.listen(env.PORT, '0.0.0.0', () => {
-    log.info({ port: env.PORT, environment: env.NODE_ENV, trustedOrigins }, 'api.started');
+    log.info(
+      {
+        port: env.PORT,
+        environment: env.NODE_ENV,
+        trustedOrigins,
+        monitoringRuntime: env.MONITORING_RUNTIME,
+      },
+      'api.started',
+    );
+    monitoring?.start();
   });
 
   /*

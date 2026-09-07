@@ -30,3 +30,4 @@ export * from './organization-member.model.js';
 export * from './user.model.js';
 export * from './website.model.js';
 export * from './website-monitor.model.js';
+export * from './worker-heartbeat.model.js';

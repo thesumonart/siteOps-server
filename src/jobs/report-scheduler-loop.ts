@@ -58,6 +58,34 @@ export class ReportSchedulerLoop {
     await this.inFlightTick;
   }
 
+  /**
+   * Runs one tick immediately, without waiting for the poll interval.
+   *
+   * Exists for the external trigger: a platform that suspends an idle instance
+   * never runs the timer at all, so the request that wakes the process has to
+   * be able to say "do the work now" rather than return and let it fall asleep
+   * again before the next scheduled tick.
+   *
+   * Concurrency-safe by construction rather than by locking. If a tick is
+   * already running, this awaits that one instead of starting a second; and
+   * even if two did overlap, every claim is an atomic lease, so the second
+   * would simply find nothing left to take.
+   */
+  async tickNow(): Promise<void> {
+    if (this.stopping) return;
+
+    const inFlight = this.inFlightTick;
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    this.inFlightTick = this.runTick().finally(() => {
+      this.inFlightTick = null;
+    });
+    await this.inFlightTick;
+  }
+
   lastTickAt(): number | null {
     return this.lastTickCompletedAt;
   }

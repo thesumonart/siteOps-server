@@ -26,7 +26,9 @@ import { MembershipRepository } from './repositories/membership.repository.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { OrganizationRepository } from './repositories/organization.repository.js';
 import { WebsiteRepository } from './repositories/website.repository.js';
+import type { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
+import { internalRoutes } from './routes/internal.routes.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { BillingService } from './services/billing.service.js';
@@ -55,7 +57,19 @@ import { asyncHandler } from './utils/async-handler.js';
  * Must be called after the database connection is open: Better Auth's adapter
  * needs a live driver handle.
  */
-export function createApp(): Express {
+export interface CreateAppOptions {
+  /**
+   * The monitoring runtime, when this process hosts it.
+   *
+   * Passed in rather than constructed here because the API process must not
+   * decide on its own to start doing monitoring work — `server.ts` reads
+   * `MONITORING_RUNTIME` and owns the lifecycle, and `createApp` stays
+   * constructible from a test with no loops attached.
+   */
+  readonly monitoringRuntime?: MonitoringRuntime | null;
+}
+
+export function createApp(options: CreateAppOptions = {}): Express {
   const app = express();
 
   if (env.TRUST_PROXY) {
@@ -220,6 +234,14 @@ export function createApp(): Express {
   };
 
   app.use('/api', apiRoutes(dependencies));
+
+  /*
+   * Operator endpoints, behind their own bearer token rather than a session.
+   * Mounted after the product API so nothing here can shadow a customer route,
+   * and separately from `apiRoutes` because it is not part of the contract the
+   * dashboard mirrors.
+   */
+  app.use('/api', internalRoutes({ monitoringRuntime: options.monitoringRuntime ?? null }));
 
   // Registered last so an unmatched path returns the documented envelope
   // instead of Express's default HTML error page.

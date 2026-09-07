@@ -1,26 +1,8 @@
 import { createServer, type Server } from 'node:http';
 
 import { env } from './config/env.js';
-import { MAX_REQUEST_TIMEOUT_MS } from './contracts/index.js';
 import { connectToDatabase, disconnectFromDatabase, pingDatabase } from './database/connection.js';
-import { EmailService } from './email/email.service.js';
-import { createEmailMonitorNotifier } from './jobs/monitor-notifier.js';
-import { MonitorSchedulerLoop } from './jobs/monitor-scheduler-loop.js';
-import { ReportSchedulerLoop } from './jobs/report-scheduler-loop.js';
-import { SchedulerLoop } from './jobs/scheduler-loop.js';
-import { createPageSpeedProvider } from './monitoring/performance/pagespeed-provider.js';
-import { createSyntheticProvider } from './monitoring/performance/synthetic-provider.js';
-import { createContentRunner } from './monitoring/runners/content.runner.js';
-import { createDomainRunner } from './monitoring/runners/domain.runner.js';
-import { createLinksRunner } from './monitoring/runners/links.runner.js';
-import { createPerformanceRunner } from './monitoring/runners/performance.runner.js';
-import { createSeoRunner } from './monitoring/runners/seo.runner.js';
-import { createSslRunner } from './monitoring/runners/ssl.runner.js';
-import type { MonitorRunner } from './monitoring/monitor-runner.js';
-import type { MonitorType } from './contracts/index.js';
-import { NotificationRepository } from './repositories/notification.repository.js';
-import { ReportRepository } from './repositories/report.repository.js';
-import { BrandingService } from './services/branding.service.js';
+import { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { createLogger, logger } from './utils/logger.js';
 
 const log = createLogger('worker');
@@ -29,13 +11,15 @@ const log = createLogger('worker');
  * Monitoring worker entry point.
  *
  * Owns process lifecycle only: configuration, the database connection, the
- * health surface, the scheduler loop and an orderly shutdown. Stopping the
- * process always drains work in progress rather than killing a check
- * mid-flight — see `SchedulerLoop.stop()`.
+ * health surface, the monitoring runtime and an orderly shutdown. Everything
+ * the worker actually *does* lives in `MonitoringRuntime`, which the API
+ * process can also host — see `MONITORING_RUNTIME` in the environment schema.
  *
- * A separate process from the API on purpose. Monitoring is long-running I/O
- * against hostile-by-default targets, and it must not compete with request
- * handling for the event loop, the connection pool or a restart.
+ * A separate process from the API by default, on purpose. Monitoring is
+ * long-running I/O against hostile-by-default targets, and it must not compete
+ * with request handling for the event loop, the connection pool or a restart.
+ * Stopping the process always drains work in progress rather than killing a
+ * check mid-flight.
  */
 
 /**
@@ -46,76 +30,17 @@ const log = createLogger('worker');
  */
 const SHUTDOWN_WATCHDOG_MS = 25_000;
 
-/**
- * A lease must comfortably outlast the slowest realistic single check, or a
- * worker still legitimately checking a slow site would have its own lease
- * stolen out from under it. Every attempt within one check can take up to the
- * *maximum any website is allowed to configure* (`MAX_REQUEST_TIMEOUT_MS`, not
- * just a default) times every redirect hop; the 30s on top covers the database
- * writes and email dispatch that follow.
- */
-const LEASE_DURATION_MS =
-  MAX_REQUEST_TIMEOUT_MS * (env.MONITOR_MAX_REDIRECTS + 1) * env.MONITOR_MAX_ATTEMPTS + 30_000;
-
-/** Identifies our requests in a monitored site's own access log. */
-const USER_AGENT = 'SiteOpsMonitor/1.0 (+https://siteops.app)';
-
-/**
- * How long a report generation or schedule claim is held.
- *
- * Must outlast the slowest realistic report — a year of checks across two
- * hundred websites — or a second worker would reclaim one still being built and
- * generate it twice. Ten minutes is generous against a job measured in seconds,
- * and the only cost of being generous is how long a genuinely crashed worker's
- * report waits before another picks it up.
- */
-const REPORT_LEASE_DURATION_MS = 10 * 60 * 1000;
-
 interface RuntimeState {
   shuttingDown: boolean;
   healthServer: Server | null;
-  schedulerLoop: SchedulerLoop | null;
-  monitorLoop: MonitorSchedulerLoop | null;
-  reportLoop: ReportSchedulerLoop | null;
+  monitoring: MonitoringRuntime | null;
 }
 
 const state: RuntimeState = {
   shuttingDown: false,
   healthServer: null,
-  schedulerLoop: null,
-  monitorLoop: null,
-  reportLoop: null,
+  monitoring: null,
 };
-
-/**
- * Every auxiliary monitor this worker can run.
- *
- * A type with no entry is simply never run — the job logs it and moves on — so
- * a monitor can be shipped as a contract and a UI before its runner exists
- * without the worker crashing on it.
- *
- * Performance is given both providers in order. PageSpeed runs real Lighthouse
- * on Google's infrastructure and is preferred when a key is configured; the
- * synthetic provider measures what a server-side fetch honestly can and always
- * works. A configured PageSpeed that fails falls through rather than failing
- * the run, so a Google outage degrades the monitor instead of silencing it.
- */
-function buildRunners(): ReadonlyMap<MonitorType, MonitorRunner> {
-  const runners: MonitorRunner[] = [
-    createSslRunner(),
-    createDomainRunner(),
-    createPerformanceRunner({
-      providers: [
-        createPageSpeedProvider({ apiKey: env.PAGESPEED_API_KEY }),
-        createSyntheticProvider(),
-      ],
-    }),
-    createContentRunner(),
-    createSeoRunner(),
-    createLinksRunner(),
-  ];
-  return new Map(runners.map((runner) => [runner.type, runner]));
-}
 
 /**
  * Minimal HTTP surface for platform probes.
@@ -153,9 +78,7 @@ function startHealthServer(port: number): Server {
         send(200, {
           status: 'ready',
           checks: { database: 'ok' },
-          lastTickAt: state.schedulerLoop?.lastTickAt() ?? null,
-          lastMonitorTickAt: state.monitorLoop?.lastTickAt() ?? null,
-          lastReportTickAt: state.reportLoop?.lastTickAt() ?? null,
+          monitoring: state.monitoring?.snapshot() ?? null,
         });
       });
       return;
@@ -189,7 +112,7 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   log.info({ signal }, 'worker.shutdown_started');
 
   /*
-   * Nothing below calls process.exit(). Once the scheduler has stopped claiming
+   * Nothing below calls process.exit(). Once the runtime has stopped claiming
    * new work, the health server is closed and the database pool is drained, no
    * handles remain and Node exits on its own with the code set here — which
    * guarantees pending writes finish first.
@@ -219,14 +142,8 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
     // Stop claiming new work and wait for any check already in flight to
     // finish — its own lease release still runs even if this wait times out,
     // since that lives in a `finally` block inside `monitoring.job.ts`.
-    await attempt('worker.scheduler_stop_failed', async () => {
-      await state.schedulerLoop?.stop();
-    }),
-    await attempt('worker.monitor_scheduler_stop_failed', async () => {
-      await state.monitorLoop?.stop();
-    }),
-    await attempt('worker.report_scheduler_stop_failed', async () => {
-      await state.reportLoop?.stop();
+    await attempt('worker.monitoring_stop_failed', async () => {
+      await state.monitoring?.stop();
     }),
     await attempt('worker.health_server_close_failed', closeHealthServer),
     await attempt('worker.database_disconnect_failed', disconnectFromDatabase),
@@ -279,78 +196,12 @@ async function bootstrap(): Promise<void> {
   });
   log.info('database.connected');
 
-  const emailService = new EmailService();
-  const notifications = new NotificationRepository();
-
-  const schedulerLoop = new SchedulerLoop(
-    {
-      pollIntervalMs: env.MONITOR_POLL_INTERVAL_SECONDS * 1000,
-      queue: {
-        batchSize: env.MONITOR_CONCURRENCY,
-        leaseDurationMs: LEASE_DURATION_MS,
-      },
-      job: {
-        maxRedirects: env.MONITOR_MAX_REDIRECTS,
-        maxAttempts: env.MONITOR_MAX_ATTEMPTS,
-        allowLoopback: env.MONITOR_ALLOW_PRIVATE_ADDRESSES,
-        userAgent: USER_AGENT,
-      },
-    },
-    { emailService, notifications },
-  );
-  state.schedulerLoop = schedulerLoop;
-
-  /*
-   * The auxiliary monitors get their own loop rather than sharing the uptime
-   * one. Their cadence is hours where uptime's is minutes, their runs cost
-   * orders of magnitude more, and a five-minute crawl must never be able to
-   * delay a one-minute uptime check. Two loops in one process keeps them
-   * independent while still sharing the connection pool and the shutdown path.
-   */
-  const monitorLoop = new MonitorSchedulerLoop(
-    {
-      pollIntervalMs: env.MONITOR_POLL_INTERVAL_SECONDS * 1000,
-      job: {
-        allowLoopback: env.MONITOR_ALLOW_PRIVATE_ADDRESSES,
-        userAgent: USER_AGENT,
-      },
-    },
-    {
-      runners: buildRunners(),
-      notifier: createEmailMonitorNotifier(emailService, notifications),
-    },
-  );
-  state.monitorLoop = monitorLoop;
-
-  /*
-   * Reports get a third loop rather than sharing either of the others. Their
-   * work is a burst of aggregation against the database with no outbound
-   * network at all, so it competes for different resources — and a monthly
-   * batch for fifty clients must never delay a one-minute uptime check.
-   */
-  const reportLoop = new ReportSchedulerLoop(
-    {
-      pollIntervalMs: env.REPORT_POLL_INTERVAL_SECONDS * 1000,
-      generationBatchSize: env.REPORT_BATCH_SIZE,
-      // Firing several schedules at once means several bursts of email; kept
-      // low so a large monthly batch spreads across ticks instead of arriving
-      // as one spike the provider may rate-limit.
-      scheduleBatchSize: 3,
-      leaseDurationMs: REPORT_LEASE_DURATION_MS,
-    },
-    {
-      reports: new ReportRepository(),
-      branding: new BrandingService(),
-      emailService,
-    },
-  );
-  state.reportLoop = reportLoop;
+  const monitoring = new MonitoringRuntime('worker');
+  state.monitoring = monitoring;
 
   state.healthServer = startHealthServer(env.WORKER_PORT);
 
-  schedulerLoop.start();
-  monitorLoop.start();
-  reportLoop.start();
+  monitoring.start();
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
@@ -366,16 +217,7 @@ async function bootstrap(): Promise<void> {
     void shutdown('unhandledRejection', 1);
   });
 
-  log.info(
-    {
-      environment: env.NODE_ENV,
-      pollIntervalSeconds: env.MONITOR_POLL_INTERVAL_SECONDS,
-      concurrency: env.MONITOR_CONCURRENCY,
-      leaseDurationMs: LEASE_DURATION_MS,
-      emailConfigured: emailService.isConfigured,
-    },
-    'worker.started',
-  );
+  log.info({ environment: env.NODE_ENV }, 'worker.started');
 }
 
 bootstrap().catch((error: unknown) => {

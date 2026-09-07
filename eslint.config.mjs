@@ -14,7 +14,21 @@ import tseslint from 'typescript-eslint';
  */
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**', '*.config.js'],
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'coverage/**',
+      '*.config.js',
+      /*
+       * The Cloudflare Worker is a separate deployment with a separate runtime.
+       * It targets workerd, not Node: no `node:` built-ins, different globals,
+       * and its own toolchain and lockfile under `cloudflare/`. Linting it with
+       * this project's type-aware config would resolve it against a tsconfig
+       * that does not include it, which fails on every file rather than finding
+       * anything.
+       */
+      'cloudflare/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

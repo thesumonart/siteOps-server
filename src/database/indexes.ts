@@ -1,6 +1,7 @@
 import { syncAuthIndexes } from './auth-indexes.js';
 import {
   AuditLogModel,
+  BillingEventModel,
   ClientModel,
   IncidentModel,
   InvitationModel,
@@ -14,6 +15,7 @@ import {
   WebsiteCheckModel,
   WebsiteModel,
   WebsiteMonitorModel,
+  WorkerHeartbeatModel,
 } from '../models/index.js';
 
 /**
@@ -56,6 +58,20 @@ export const MANAGED_MODELS = [
   NotificationModel,
   NotificationSettingsModel,
   AuditLogModel,
+  /*
+   * Billing events carry the unique index on `eventId` that makes webhook
+   * delivery idempotent. It was declared on the schema and never applied here,
+   * and because `MONGODB_AUTO_INDEX` is false in production it was therefore
+   * never created there — so a provider retry, which is routine and expected,
+   * would have been processed a second time.
+   */
+  BillingEventModel,
+  /*
+   * Heartbeats carry a unique key and a TTL. Without the unique index one
+   * process can become two documents and a dead worker looks like a healthy
+   * pair; without the TTL every deploy's instance accumulates forever.
+   */
+  WorkerHeartbeatModel,
 ] as const;
 
 export async function syncAllIndexes(): Promise<readonly IndexSyncResult[]> {
