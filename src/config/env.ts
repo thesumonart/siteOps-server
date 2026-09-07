@@ -1,4 +1,4 @@
-import { envSchema, type Env } from './env.schema.js';
+import { describeEnvIssues, envSchema, type Env } from './env.schema.js';
 
 /**
  * The loaded, validated configuration for this process.
@@ -11,12 +11,10 @@ function loadEnv(): Env {
   const parsed = envSchema.safeParse(process.env);
 
   if (!parsed.success) {
-    // Field names and messages only. Values are withheld because this output
-    // reaches logs and the offending value is often the secret itself.
-    const details = parsed.error.issues
-      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
-      .join('\n');
-    throw new Error(`Invalid SiteOps environment configuration:\n${details}`);
+    // Names and messages only, never values — see `describeEnvIssues`, which
+    // also names the offending variables in the first line, so a log viewer
+    // that shows one line still says what is wrong.
+    throw new Error(describeEnvIssues(parsed.error.issues));
   }
 
   return parsed.data;

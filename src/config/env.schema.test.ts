@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { envSchema } from './env.schema.js';
+import { describeEnvIssues, envSchema } from './env.schema.js';
 
 /**
  * Regression coverage for the production sign-in failure.
@@ -66,5 +66,53 @@ describe('envSchema production detection', () => {
     );
 
     expect(result.success).toBe(true);
+  });
+});
+
+/**
+ * Parses a configuration that is expected to be refused, and returns the
+ * formatted failure. Narrows the result rather than asserting non-null, and
+ * gives the header its own name so no test indexes into a possibly-empty split.
+ */
+function describeFailure(env: Record<string, string>): { header: string; full: string } {
+  const result = envSchema.safeParse(env);
+  if (result.success) throw new Error('Expected this configuration to be refused, but it parsed.');
+
+  const full = describeEnvIssues(result.error.issues);
+  return { header: full.split('\n')[0] ?? '', full };
+}
+
+describe('describeEnvIssues', () => {
+  it('names every offending variable in the first line', () => {
+    // The first line is often all a deployment log shows. SiteOps failed to
+    // start on Render behind a header that named nothing at all.
+    const { header } = describeFailure({});
+
+    expect(header).toContain('APP_URL');
+    expect(header).toContain('API_URL');
+    expect(header).toContain('MONGODB_URI');
+    expect(header).toContain('AUTH_SECRET');
+    expect(header).toContain('4 problems');
+  });
+
+  it('lists each problem on its own line', () => {
+    const { header, full } = describeFailure(baseEnv({ AUTH_SECRET: 'too-short' }));
+
+    expect(full).toMatch(/^ {2}- AUTH_SECRET: .+$/m);
+    expect(header).toContain('1 problem with: AUTH_SECRET');
+  });
+
+  it('never repeats a variable in the header', () => {
+    const { header } = describeFailure(baseEnv({ AUTH_SECRET: '' }));
+
+    expect(header.match(/AUTH_SECRET/g)).toHaveLength(1);
+  });
+
+  it('does not echo the offending value', () => {
+    // This output reaches deployment logs, and the value that failed is very
+    // often the secret itself.
+    const secret = 'sk-live-do-not-log-this-value';
+
+    expect(describeFailure(baseEnv({ AUTH_SECRET: secret })).full).not.toContain(secret);
   });
 });

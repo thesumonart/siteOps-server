@@ -237,3 +237,28 @@ export const envSchema = z
   });
 
 export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Turns a failed parse into something a deployment log can be read from.
+ *
+ * The header names every offending variable, and that is the point: a thrown
+ * `Error` puts its detail on continuation lines, and a platform log viewer
+ * shows only the first, splits the rest into separate entries, or interleaves
+ * them with the stack trace. SiteOps failed to start on Render behind a header
+ * that named nothing, and the detail under it was easy to miss entirely.
+ *
+ * Names and validation messages only. Values are withheld because this output
+ * reaches logs and the offending value is often the secret itself.
+ */
+export function describeEnvIssues(issues: readonly z.core.$ZodIssue[]): string {
+  const nameOf = (issue: z.core.$ZodIssue): string => issue.path.join('.') || '(root)';
+  const names = [...new Set(issues.map(nameOf))];
+
+  const header =
+    'Invalid SiteOps environment configuration — ' +
+    `${String(issues.length)} problem${issues.length === 1 ? '' : 's'} with: ${names.join(', ')}`;
+
+  const detail = issues.map((issue) => `  - ${nameOf(issue)}: ${issue.message}`).join('\n');
+
+  return `${header}\n${detail}`;
+}
