@@ -26,6 +26,22 @@ const csvOrigins = z
   )
   .pipe(z.array(z.url()).min(1));
 
+/**
+ * Whether an origin names somewhere other than the machine running the process.
+ *
+ * Used to tell a real deployment apart from a developer's own machine. Anything
+ * on loopback is local by definition; everything else is served to someone else.
+ */
+function isRemoteOrigin(origin: string): boolean {
+  const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+  try {
+    return !LOOPBACK.has(new URL(origin).hostname);
+  } catch {
+    // Malformed URLs are already rejected by `z.url()`; nothing to add here.
+    return false;
+  }
+}
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -144,6 +160,29 @@ export const envSchema = z
     MONITOR_ALLOW_PRIVATE_ADDRESSES: booleanFromEnv.default(false),
   })
   .superRefine((value, ctx) => {
+    /*
+     * A deployment served over https to a hostname that is not this machine is
+     * a real deployment, and it must say so. `NODE_ENV` is what decides whether
+     * session cookies get the `Secure` attribute and the `__Secure-` prefix, and
+     * a cookie issued without them over https is one a browser is entitled to
+     * treat as insecure — which is exactly how SiteOps shipped to Render with
+     * `NODE_ENV` unset, issuing session cookies no browser would keep.
+     *
+     * Checked here rather than left to a deployment checklist because the
+     * failure is silent: everything starts, sign-in answers 200, and the only
+     * symptom is that nobody stays signed in.
+     */
+    if (value.NODE_ENV !== 'production' && value.APP_URL.startsWith('https://')) {
+      if (isRemoteOrigin(value.APP_URL)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['NODE_ENV'],
+          message:
+            `NODE_ENV must be "production" when APP_URL is a remote https origin (${value.APP_URL}). ` +
+            'Outside production the session cookie is issued without the Secure attribute, and no browser will keep it.',
+        });
+      }
+    }
     // Without a mail provider, verification links and outage alerts silently go
     // nowhere. Acceptable locally, never in production.
     if (value.NODE_ENV === 'production' && !value.RESEND_API_KEY) {

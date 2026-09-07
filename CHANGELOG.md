@@ -133,6 +133,33 @@ deployed together.
   Pending invitations are deliberately excluded — an invitation nobody accepts would otherwise
   occupy a seat forever.
 
+### Fixed
+
+- **Nobody could stay signed in on the deployed product.** Sign-in answered `200` with a valid
+  session and the browser threw the cookie away, so every request after it was anonymous and the
+  dashboard sent the person straight back to the sign-in page.
+
+  Two things were wrong, and neither is visible from inside a single process:
+
+  - The deployment ran with `NODE_ENV` unset. That value alone decides `useSecureCookies` and the
+    cookie's `secure` attribute in `config/auth.ts`, so every session cookie went out over https
+    without `Secure` and without the `__Secure-` prefix. Nothing failed loudly — the process
+    started, the database connected, and only the cookie was wrong.
+  - The dashboard called the API on another registrable domain (a Vercel host talking to a Render
+    host). The session cookie is `SameSite=Lax`, and a browser will not _store_ a `Lax` cookie that
+    arrives on a cross-site response. It is also scoped to the host that set it, so the dashboard's
+    own routing middleware and its server components could never have read it either.
+
+  The schema now refuses to start when `APP_URL` is a remote https origin and `NODE_ENV` is not
+  `production`, because that combination has no working outcome and no visible symptom until
+  somebody cannot sign in. `siteOps-client` fixes the other half by serving the API from its own
+  origin; see its `next.config.ts` and `src/lib/api-base.ts`.
+
+  Neither repository's test suite could have caught this. The end-to-end suite serves the dashboard
+  on `localhost:3100` and the API on `localhost:4100` — cookies ignore the port, so those are one
+  site and the cookie behaves exactly as intended. The bug only exists once the two halves are
+  served from different registrable domains.
+
 ## [0.1.0]
 
 Initial release: authentication, organizations and roles, website management, uptime and

@@ -173,4 +173,24 @@ The dashboard sends `credentials: 'include'`, so:
 - Different hosts under one registrable domain (`app.siteops.app` and `api.siteops.app`) need
   `COOKIE_DOMAIN=.siteops.app`.
 - Genuinely different sites cannot share a `SameSite=Lax` cookie. Serve both from one registrable
-  domain.
+  domain, or put the API behind the dashboard's own origin.
+
+### When the two are on different sites
+
+A Vercel dashboard calling a Render API is two registrable domains, and no cookie setting rescues
+it. `SameSite=None` would let the browser store the cookie, but it would still be scoped to the API's
+host, so the dashboard's routing middleware and its server components — both of which read the
+cookie on their own origin — would never see it.
+
+The arrangement SiteOps uses instead is a proxy in the dashboard: `siteOps-client` rewrites `/api/*`
+onto `API_URL`, so the browser only ever talks to the dashboard's origin. The cookie is then set by,
+scoped to, and returned to that host, and `SameSite=Lax` is both correct and the safer setting.
+
+Two things still have to line up for that to work:
+
+- `APP_URL` must be the dashboard's public origin. Better Auth validates `Origin`/`Referer` against
+  it on state-changing auth routes, and the proxy forwards both — so a forged cross-site request is
+  still refused, and a mismatch here refuses sign-out with a bare `403`.
+- `COOKIE_DOMAIN` must stay **unset**. Left unset the cookie carries no `Domain` attribute and the
+  browser scopes it to the dashboard's host, which is the only host that will ever send it back.
+  Setting it to the API's domain makes the browser reject the cookie outright.
