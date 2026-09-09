@@ -1,0 +1,121 @@
+# SiteOps backend on Render — one web service, monitoring included.
+#
+# This is the single-service arrangement described in docs/DEPLOYMENT.md, not
+# the default one. Render's Background Workers are a paid feature, so on a free
+# plan `node dist/worker.js` has nowhere to run and the default configuration
+# answers every health check while checking no websites. `MONITORING_RUNTIME`
+# below is what stops that, and it is the one value in this file that must never
+# be changed without moving the loops somewhere else first.
+#
+# The service still needs an external clock: a plan that suspends an idle
+# instance runs no timers, and an in-process loop cannot wake itself. That is
+# `cloudflare/`, which fires once a minute. Neither half works alone.
+#
+# Apply with Render's Blueprints (New → Blueprint), or use it as the reference
+# for a service configured by hand.
+
+services:
+  - type: web
+    name: siteops-api
+    runtime: node
+    plan: free
+    # Put this in the same region as the MongoDB Atlas cluster. Every request
+    # makes several round trips to it, and a cross-region hop costs more latency
+    # than anything in the application does.
+    region: oregon
+    branch: main
+    autoDeployTrigger: commit
+
+    # pnpm is pinned rather than taken from the build image. The lockfile is
+    # v9 and the repository declares `packageManager: pnpm@11.20.0`; a build
+    # image shipping an older pnpm would either rewrite the lockfile or refuse
+    # it, and `--frozen-lockfile` exists precisely so a deploy installs what was
+    # tested. npm is used to install it because npm is always present, whereas
+    # corepack's availability in the build image is not something to depend on.
+    #
+    # Node itself comes from .nvmrc (24.15.0), which Render reads.
+    buildCommand: npm install -g pnpm@11.20.0 && pnpm install --frozen-lockfile && pnpm build
+
+    # Run node directly rather than through `pnpm start`. Both run the same
+    # file, but a package-manager wrapper sits between Render's SIGTERM and the
+    # process that has to handle it — and handling it is what drains the checks
+    # already in flight instead of killing them mid-request. `pnpm start` also
+    # adds `--env-file-if-exists=.env`, which does nothing here: on Render the
+    # configuration below *is* the environment.
+    startCommand: node --enable-source-maps dist/server.js
+
+    # Liveness, deliberately: it performs no dependency I/O. Pointing this at
+    # /health/ready would turn a brief Atlas blip into a restart loop.
+    healthCheckPath: /health
+
+    envVars:
+      # PORT is injected by Render and must not be set here. The server binds
+      # `env.PORT` on 0.0.0.0, so whatever Render provides is what it listens on.
+
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+
+      # The whole reason this file exists. `separate` — the default — would
+      # start an API that runs no monitoring at all, silently.
+      - key: MONITORING_RUNTIME
+        value: inline
+
+      # One process now holds the only pool, so this is the deployment's entire
+      # connection budget rather than half of it. Five is chosen for the 512 MB
+      # instance rather than for Atlas, whose M0 connection limit is nowhere
+      # near the binding constraint.
+      - key: MONGODB_MAX_POOL_SIZE
+        value: "5"
+
+      # Websites checked simultaneously by the uptime loop. Halved from the
+      # default because on 0.1 CPU those checks share an event loop with request
+      # handling. Note this bounds the uptime queue only — the auxiliary
+      # monitors carry their own per-type budgets in monitor-scheduler-loop.ts.
+      - key: MONITOR_CONCURRENCY
+        value: "5"
+
+      # Render terminates TLS at its edge and forwards the client address.
+      # Without this every request is attributed to the platform and the whole
+      # deployment shares one rate-limit budget.
+      - key: TRUST_PROXY
+        value: "true"
+
+      # Indexes are an explicit deployment step, run against Atlas from a
+      # machine that has the connection string — see docs/DEPLOYMENT.md. An
+      # index build issued by a booting process can stall a live cluster, and
+      # Render's free plan has no shell to run one from afterwards.
+      - key: MONGODB_AUTO_INDEX
+        value: "false"
+
+      # Set in the dashboard at Blueprint creation, never in this file. Each one
+      # is either a secret or specific to a deployment; all are required, so
+      # none of them may be left blank — the environment schema refuses an empty
+      # value at startup rather than running misconfigured.
+      - key: APP_URL # https origin of the dashboard
+        sync: false
+      - key: API_URL # https origin of this service
+        sync: false
+      - key: MONGODB_URI # Atlas connection string
+        sync: false
+      - key: AUTH_SECRET # openssl rand -base64 32
+        sync: false
+      - key: INTERNAL_API_KEY # openssl rand -base64 48; the Cloudflare Worker needs the same value
+        sync: false
+      - key: RESEND_API_KEY # required in production, or nobody is told about an outage
+        sync: false
+
+      # Deliberately absent: EMAIL_FROM and every STRIPE_* variable.
+      #
+      # All of them are optional, and "unset" is a supported state — billing
+      # answers BILLING_NOT_CONFIGURED and the dashboard says so plainly. A
+      # `sync: false` entry is not: Blueprint creation prompts for a value, and
+      # whichever way that resolves for a blank one it is worse than absence.
+      # An empty string fails the schema's `min(1)` and the service will not
+      # start; a placeholder is worse still, because STRIPE_SECRET_KEY without a
+      # real STRIPE_WEBHOOK_SECRET is refused at startup by design — a
+      # deployment that can take money and cannot verify that it did.
+      #
+      # Add them in the dashboard if and when this deployment sells something.
+      # See .env.example for what each one is.

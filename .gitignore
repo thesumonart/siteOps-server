@@ -5,6 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Wrangler's local state and bundles, written by `wrangler dev` and `wrangler deploy`
+cloudflare/.wrangler/
+
 # Test output
 coverage/
 

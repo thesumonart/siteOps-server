@@ -133,6 +133,154 @@ MongoDB over a TCP driver connection. None of the three exist in the Workers run
 checks there would mean deleting certificate inspection and the SSRF guard, so the checks stay on
 Node and Cloudflare is only the clock.
 
+### Render's free plan, concretely
+
+`render.yaml` in the repository root is this arrangement as a Blueprint. Applying it (New →
+Blueprint) creates the service with the build and start commands, the health check and every
+non-secret value already set; the six secrets are prompted for once. Configuring a service by hand
+works equally well — the file is then the reference for what to type.
+
+```text
+Cloudflare Worker (free)          Render web service (free)         MongoDB Atlas (M0)
+  cron "* * * * *"                  one Node process                  one replica set
+        │                           MONITORING_RUNTIME=inline               ▲
+        └── POST /api/internal/monitoring/tick ──▶ Express API ─────────────┘
+            Authorization: Bearer INTERNAL_API_KEY   + the three scheduler loops
+```
+
+| Setting           | Value                                                                         |
+| ----------------- | ----------------------------------------------------------------------------- |
+| Runtime           | Node, version from `.nvmrc` (24.15.0)                                         |
+| Build command     | `npm install -g pnpm@11.20.0 && pnpm install --frozen-lockfile && pnpm build` |
+| Start command     | `node --enable-source-maps dist/server.js`                                    |
+| Health check path | `/health`                                                                     |
+| Instance          | Free — 0.1 CPU, 512 MB, single instance                                       |
+
+pnpm is installed explicitly rather than taken from the build image: the lockfile is v9 and the
+repository pins `packageManager: pnpm@11.20.0`, and `--frozen-lockfile` exists so a deploy installs
+what was tested rather than whatever an older pnpm resolves.
+
+The start command runs `node` rather than `pnpm start`. Both run the same file, but a package manager
+between Render's `SIGTERM` and the process that handles it is a process that might not forward it —
+and handling it is what drains the checks already in flight. `pnpm start` also adds
+`--env-file-if-exists=.env`, which does nothing here.
+
+**Never set `PORT`.** Render injects it, the server binds `env.PORT` on `0.0.0.0`, and overriding it
+means Render routes traffic to a port nothing is listening on.
+
+#### The six values Render must hold
+
+Set these as environment variables on the service — Render encrypts them at rest and they are never
+in the repository.
+
+| Variable           | Notes                                                                    |
+| ------------------ | ------------------------------------------------------------------------ |
+| `APP_URL`          | The dashboard's https origin. CORS, cookies and every link in an email.  |
+| `API_URL`          | This service's https origin, e.g. `https://siteops-server.onrender.com`. |
+| `MONGODB_URI`      | The Atlas connection string, including the database name.                |
+| `AUTH_SECRET`      | `openssl rand -base64 32`.                                               |
+| `INTERNAL_API_KEY` | `openssl rand -base64 48`. The Cloudflare Worker needs the same value.   |
+| `RESEND_API_KEY`   | Required in production, or nobody is told about an outage.               |
+
+`NODE_ENV=production` is not optional and not cosmetic: it is what issues session cookies with
+`Secure` and the `__Secure-` prefix. Startup refuses a remote https `APP_URL` without it, because
+otherwise everything looks fine and nobody stays signed in.
+
+`EMAIL_FROM` and the `STRIPE_*` variables are deliberately not in `render.yaml`. All are optional and
+absence is a supported state, but a Blueprint prompts for every `sync: false` entry — and a blank or
+placeholder `STRIPE_SECRET_KEY` is worse than no Stripe at all, since a secret key without a real
+webhook secret is refused at startup by design. Add them in the dashboard when this deployment
+actually sells something.
+
+#### Atlas from Render
+
+M0 is a replica set, which is what the organization-creation transaction needs. Nothing about the
+free tier is special beyond its size.
+
+Render has no per-service static outbound IP on any plan; traffic leaves through published
+per-region CIDR ranges, listed in the dashboard under **Connect → Outbound**. Allowlist those ranges
+in Atlas's network access list rather than `0.0.0.0/0` — it is the same amount of work and it does
+not leave the cluster open to the internet.
+
+`MONGODB_MAX_POOL_SIZE=5` is right here because one process now holds the only pool rather than
+sharing the budget with a worker. It is sized for the 512 MB instance, not for Atlas: M0's connection
+limit is nowhere near the binding constraint.
+
+#### Indexes, with no shell to run them from
+
+Render's free plan has no SSH and no one-off jobs, so `pnpm indexes:sync` cannot run _on_ Render. Run
+it against Atlas from a machine that has the connection string — the shell value wins over whatever
+is in a local `.env`:
+
+```bash
+MONGODB_URI="mongodb+srv://…/siteops" pnpm indexes:sync
+MONGODB_URI="mongodb+srv://…/siteops" pnpm indexes:verify   # exits non-zero if anything is missing
+```
+
+Do this before the first deploy and after any deploy that changed a model. `MONGODB_AUTO_INDEX` stays
+`false`: an index build issued by a booting process can stall a live cluster, and on a 0.1-CPU
+instance it also competes with the request that triggered the boot.
+
+#### The Cloudflare Worker
+
+Already written and already correct; the only deployment change is pointing it at the real service.
+
+```bash
+cd cloudflare
+# SITEOPS_API_URL in wrangler.toml must be this service's origin.
+npx wrangler secret put INTERNAL_API_KEY   # the same value Render holds
+npx wrangler deploy
+```
+
+`INTERNAL_API_KEY` is a secret, never a `[vars]` entry — putting it there commits it. One request a
+minute is 43,200 a month against the free plan's 100,000 a day.
+
+#### Verifying the deployment
+
+```bash
+curl -s https://<service>.onrender.com/health                  # {"success":true,...,"status":"ok"}
+curl -s https://<service>.onrender.com/health/ready            # 503 until Atlas is reachable
+
+curl -s -X POST https://<service>.onrender.com/api/internal/monitoring/tick
+# 401 — the operator endpoints are never open
+
+curl -s -X POST -H "Authorization: Bearer $INTERNAL_API_KEY" \
+  https://<service>.onrender.com/api/internal/monitoring/tick
+# {"hosted":true,"ran":["uptime","monitors","reports"],"failed":[]}
+```
+
+`"hosted": true` is the whole point of the exercise. `false` means `MONITORING_RUNTIME` is not
+`inline` and this deployment is checking nothing. Then confirm the clock runs on its own:
+`wrangler tail` should show a `tick.ok` line every minute, and `/api/internal/monitoring/health`
+should report `status: running` with a heartbeat a few seconds old.
+
+### What the free plan does and does not buy
+
+It genuinely runs. The constraints below are the ones that decide whether it is _enough_, and none of
+them are hypothetical.
+
+| Constraint                           | Consequence                                                                                                                                                                                   |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spins down after 15 idle minutes     | Covered — the Worker knocks every minute. Covered _only while the Worker runs_: if it stops, the service sleeps and monitoring stops with it.                                                 |
+| ~1 minute cold start                 | Every restart and every deploy is a monitoring gap of about a minute.                                                                                                                         |
+| 750 instance hours per **workspace** | A service kept awake all month uses ~744 of them in a 31-day month. A second free web service in the same workspace exhausts the budget and suspends both until the month rolls over.         |
+| 0.1 CPU, 512 MB, one instance        | Measured on this build: ~137 MB resident with the loops running and the queue empty; a hundred-website PDF renders in ~17 ms and 9 kB. It fits, with CPU as the tight constraint, not memory. |
+| No shell, no one-off jobs            | Index synchronization runs from a laptop, not from the platform.                                                                                                                              |
+| No persistent disk                   | Costs nothing here — reports are built in memory and emailed, and nothing else writes to disk.                                                                                                |
+| Outbound SMTP ports blocked          | Costs nothing here — Resend is an HTTPS API.                                                                                                                                                  |
+
+**$0 hosting is not the same as 24/7 production reliability.** What this arrangement gives you is a
+real, honest deployment that checks real websites and sends real alerts, for nothing. What it does
+not give you is an SLA, a second instance, a shell to diagnose from, or any margin in the monthly
+hour budget — and the cadence depends on a cron in a different vendor's account, so an outage there
+is an outage in the only thing keeping this awake.
+
+The first paid step worth taking is Render's cheapest paid instance for this service. It removes the
+spin-down and the instance-hour ceiling, at which point the in-process timers run continuously and
+the Cloudflare Worker becomes a watchdog rather than the heartbeat itself — a materially different
+reliability story for one small monthly cost. A VPS is only necessary if you want the worker back in
+its own process, which is the better architecture but not one a free plan can host.
+
 ### Verifying it works
 
 ```bash
