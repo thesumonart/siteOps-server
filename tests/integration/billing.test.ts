@@ -304,6 +304,29 @@ describe.skipIf(!available)('POST /api/billing/webhook', () => {
     expect(await BillingEventModel.countDocuments({}).exec()).toBe(0);
   });
 
+  it('reaches the handler with the raw bytes the provider signed', async () => {
+    /*
+     * The global `express.json()` claims any application/json body, and the
+     * webhook's own `express.raw` is mounted downstream of it — so without the
+     * exemption in `app.ts` the parser wins, the controller receives an object
+     * instead of a Buffer, and it refuses every event as unverifiable.
+     *
+     * That failure is invisible to the assertions above, which only require
+     * *a* refusal: a misconfigured receiver refuses too. It is asserted here by
+     * the reason instead. `BILLING_NOT_CONFIGURED` means the request got past
+     * the Buffer check and into the service, which is the only thing this
+     * deployment can prove without Stripe credentials; `INTERNAL_ERROR` would
+     * mean the bytes never survived the parser, and in production that is every
+     * subscription change silently dropped.
+     */
+    const response = await client()
+      .post('/api/billing/webhook')
+      .set('content-type', 'application/json')
+      .send(JSON.stringify({ id: 'evt_raw', type: 'customer.subscription.updated' }));
+
+    expect((response.body as ErrorEnvelope).error.code).toBe('BILLING_NOT_CONFIGURED');
+  });
+
   it('changes no plan for a webhook it will not verify', async () => {
     const body = JSON.stringify({
       id: 'evt_forged',

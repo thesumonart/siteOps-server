@@ -28,6 +28,7 @@ import { OrganizationRepository } from './repositories/organization.repository.j
 import { WebsiteRepository } from './repositories/website.repository.js';
 import type { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
+import { STRIPE_WEBHOOK_PATH } from './routes/billing.routes.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
@@ -123,8 +124,29 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const auth = createAuth(emailService);
   app.use(AUTH_BASE_PATH, authRateLimit(), betterAuthHandler(auth));
 
-  // A monitoring payload is small; a generous limit only helps an attacker.
-  app.use(express.json({ limit: '100kb' }));
+  /*
+   * JSON parsing for everything except the provider webhook.
+   *
+   * A monitoring payload is small; a generous limit only helps an attacker.
+   *
+   * The webhook is exempt because it must reach its handler as the exact bytes
+   * Stripe signed. `express.json()` claims any `application/json` body, and it
+   * is registered here — ahead of the router that mounts the webhook's own
+   * `express.raw`. Body-parser marks a request as already read, so the raw
+   * parser downstream skips silently and the controller receives a parsed
+   * object it correctly refuses to verify. The symptom is a 500 on every event
+   * from a deployment that is otherwise completely healthy, and since this
+   * route is the only writer of `organization.plan`, no subscription would ever
+   * apply: checkout succeeds, Stripe retries, nothing changes.
+   */
+  const jsonParser = express.json({ limit: '100kb' });
+  app.use((request, response, next) => {
+    if (request.path === STRIPE_WEBHOOK_PATH) {
+      next();
+      return;
+    }
+    jsonParser(request, response, next);
+  });
   app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
   app.use(defaultRateLimit());

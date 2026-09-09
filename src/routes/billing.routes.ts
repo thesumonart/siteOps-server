@@ -12,6 +12,18 @@ import type { ApiDependencies } from './index.js';
 /** Largest webhook body accepted. Stripe's are a few kB; this is generous. */
 const WEBHOOK_BODY_LIMIT = '1mb';
 
+/** The webhook route, relative to the `/api` prefix this router is mounted at. */
+const WEBHOOK_ROUTE = '/billing/webhook';
+
+/**
+ * The same path as the application sees it.
+ *
+ * Exported because `app.ts` must exempt it from the global JSON parser, and a
+ * second literal over there is exactly the kind of thing that drifts. See the
+ * mounting note below for why the exemption is load-bearing.
+ */
+export const STRIPE_WEBHOOK_PATH = `/api${WEBHOOK_ROUTE}`;
+
 /**
  * Plans, subscriptions and provider webhooks.
  *
@@ -37,21 +49,25 @@ export function billingRoutes(dependencies: ApiDependencies): Router {
   router.get('/billing/plans', controller.catalog);
 
   /*
-   * Mounted with a raw body parser of its own.
+   * Mounted with a raw body parser of its own, so the handler receives the
+   * exact bytes the provider signed. Parsing and re-serialising would change
+   * key order and whitespace, and the signature would never verify again — the
+   * controller asserts it got a Buffer rather than trusting this stays true.
    *
-   * `express.json()` is registered globally in `app.ts`, but Express runs the
-   * first parser that claims the request and this one is reached first for this
-   * path, so the handler receives the exact bytes the provider signed. Parsing
-   * and re-serialising would change key order and whitespace, and the signature
-   * would never verify again — the controller asserts it got a Buffer rather
-   * than trusting this stays true.
+   * This only works because `app.ts` exempts `STRIPE_WEBHOOK_PATH` from the
+   * global `express.json()`. Express does not run "the first parser that claims
+   * the request": body-parser marks a request as read, and a raw parser reached
+   * after a JSON one skips silently. Registered globally without the exemption,
+   * the JSON parser wins, the controller sees an object and refuses every
+   * event — which is a total, silent billing outage, because this route is the
+   * only writer of `organization.plan`.
    *
    * No rate limit: the provider decides how often it delivers, and throttling
    * it would turn a burst of legitimate events into lost subscription changes.
    * The signature check is the gate, and it is cheap.
    */
   router.post(
-    '/billing/webhook',
+    WEBHOOK_ROUTE,
     raw({ type: 'application/json', limit: WEBHOOK_BODY_LIMIT }),
     asyncHandler(controller.webhook),
   );
