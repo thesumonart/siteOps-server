@@ -280,6 +280,11 @@ describe.skipIf(!available)('every endpoint siteOps-client calls', () => {
         'paused',
         'totalWebsites',
         'unknown',
+        // Freshness, added with the staleness banner: the newest check across
+        // the organization and the shortest interval any website is set to.
+        // The dashboard reads both to decide whether these figures are current.
+        'lastCheckAt',
+        'shortestIntervalSeconds',
       ].sort(),
     );
   });
