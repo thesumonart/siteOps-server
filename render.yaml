@@ -1,0 +1,86 @@
+# SiteOps backend on Render — one web service that also hosts the monitoring loops.
+#
+# Paired with the Cloudflare cron worker in `cloudflare/`, which calls
+# /api/internal/monitoring/tick once a minute. Neither half works alone: a
+# suspended instance runs no timers, and the worker cannot perform checks itself
+# (certificate inspection needs node:tls and the SSRF guard needs node:dns,
+# neither of which exists in the Workers runtime).
+#
+# Apply with Render's Blueprints (New -> Blueprint), or use it as the reference
+# for a service configured by hand.
+
+services:
+  - type: web
+    name: api-backend
+    runtime: node
+
+    buildCommand: "pnpm install && pnpm build"
+
+    # Run node directly rather than through `pnpm start`. Both run the same
+    # file, but a package-manager wrapper sits between Render's SIGTERM and the
+    # process that has to handle it — and handling it is what drains the checks
+    # already in flight instead of killing them mid-request.
+    startCommand: "node dist/server.js"
+
+    # Liveness, deliberately: it performs no dependency I/O. Pointing this at
+    # /health/ready would turn a brief database blip into a restart loop.
+    healthCheckPath: /health
+
+    envVars:
+      # PORT is injected by Render and must not be set here. server.ts binds
+      # `env.PORT` on 0.0.0.0, so whatever Render provides is what it listens on.
+
+      - key: NODE_ENV
+        value: production
+
+      # 11.20.0, not 9.0.0: package.json pins `packageManager: pnpm@11.20.0`
+      # and `engines.pnpm` requires >=11.0.0, so pnpm 9 is refused before the
+      # install ever reaches the lockfile.
+      - key: PNPM_VERSION
+        value: "11.20.0"
+
+      # `inline`, not `api`. The schema is z.enum(['separate', 'inline'])
+      # in src/config/env.schema.ts and it is parsed at import time, so any
+      # other value throws before the server binds — the service would crash
+      # loop with no request ever served. `inline` is the value that makes this
+      # single process host the monitoring loops; `separate` expects a second
+      # process running dist/worker.js, which a one-service plan cannot host.
+      - key: MONITORING_RUNTIME
+        value: inline
+
+      # Render terminates TLS at its edge and forwards the client address.
+      # Without this every request is attributed to the platform and the whole
+      # deployment shares one rate-limit budget.
+      - key: TRUST_PROXY
+        value: "true"
+
+      # --- Set in the Render dashboard, never in this file. ---
+      #
+      # All of these are required for the process to start. The environment
+      # schema refuses an empty value rather than running misconfigured, so
+      # none of them may be left blank at Blueprint creation.
+
+      - key: APP_URL # https origin of the dashboard; must be https in production
+        sync: false
+      - key: API_URL # https origin of this service
+        sync: false
+      - key: MONGODB_URI # Atlas connection string, including the database name
+        sync: false
+      - key: AUTH_SECRET # openssl rand -base64 32; minimum 32 characters
+        sync: false
+      - key: RESEND_API_KEY # required in production, or nobody is told about an outage
+        sync: false
+
+      # The bearer token the Cloudflare worker presents. Minimum 32 characters
+      # (openssl rand -base64 48). Unset means /api/internal answers 503 and the
+      # cron worker drives nothing, so monitoring never runs.
+      - key: INTERNAL_API_KEY
+        sync: false
+
+      # Optional. Blueprint creation prompts for every `sync: false` entry, and
+      # an empty string fails the schema's min(1) check — so either give this a
+      # real value from the Stripe dashboard or delete these two lines. Billing
+      # answers BILLING_NOT_CONFIGURED when Stripe is absent, which is a
+      # supported state; a blank value is not.
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
