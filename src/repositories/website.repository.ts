@@ -231,6 +231,9 @@ export class WebsiteRepository {
         | 'nextCheckAt'
         | 'consecutiveFailures'
         | 'consecutiveSuccesses'
+        | 'responseTimeSamples'
+        | 'consecutiveAnomalies'
+        | 'consecutiveNormalChecks'
         | 'clientId'
       >
     >,

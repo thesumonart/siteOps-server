@@ -67,6 +67,8 @@ export interface StatusInput {
   readonly responseTimeMs: number | null;
   /** Whether an incident is open *after* this check's transition has been applied. */
   readonly hasOpenIncidentAfter: boolean;
+  /** Whether a response-time anomaly incident is open after this check. */
+  readonly hasOpenAnomalyAfter: boolean;
 }
 
 /**
@@ -76,13 +78,18 @@ export interface StatusInput {
  * check: during a recovering-but-not-yet-confirmed window the site is still
  * shown as `down`, because the incident is still open and showing anything
  * else would contradict the open incident on the incidents page. `degraded`
- * covers two distinct situations — a failing check that has not yet crossed
- * the failure threshold, and a successful-but-slow response — both genuinely
- * described as "responding slowly or intermittently".
+ * covers three situations — a failing check that has not yet crossed the
+ * failure threshold, an open response-time anomaly, and a successful-but-slow
+ * response — all genuinely described as "responding slowly or intermittently".
+ *
+ * An open anomaly holds the site at `degraded` even through a fast check, for
+ * the same reason an open outage holds it at `down`: the incidents page says
+ * it is degraded until the recovery streak says otherwise.
  */
 export function deriveDisplayStatus(input: StatusInput): WebsiteStatus {
   if (input.hasOpenIncidentAfter) return 'down';
   if (input.checkStatus !== 'up') return 'degraded';
+  if (input.hasOpenAnomalyAfter) return 'degraded';
   if (input.responseTimeMs !== null && input.responseTimeMs >= DEGRADED_RESPONSE_TIME_MS) {
     return 'degraded';
   }

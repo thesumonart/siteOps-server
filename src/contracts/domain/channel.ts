@@ -59,6 +59,8 @@ export const FEATURE_FOR_CHANNEL_TYPE: Record<ChannelType, PlanFeature> = {
 export const CHANNEL_EVENTS = [
   'website.down',
   'website.recovered',
+  'website.degraded',
+  'website.degradation_resolved',
   'monitor.problem',
   'monitor.recovered',
 ] as const satisfies readonly NotificationEvent[];
@@ -68,6 +70,8 @@ export type ChannelEvent = (typeof CHANNEL_EVENTS)[number];
 export const CHANNEL_EVENT_LABELS: Record<ChannelEvent, string> = {
   'website.down': 'A website goes down',
   'website.recovered': 'A website comes back',
+  'website.degraded': 'A website is responding unusually slowly',
+  'website.degradation_resolved': 'Response times are back to normal',
   'monitor.problem': 'A monitor finds a problem',
   'monitor.recovered': 'A monitor problem is resolved',
 };
@@ -137,6 +141,19 @@ export interface WebhookMonitor {
 }
 
 /**
+ * The numbers behind a `website.degraded` call: the response that tipped it,
+ * and the baseline it was judged against. A receiver can re-derive the verdict
+ * from these, which is the point — nothing about it is a black box.
+ */
+export interface WebhookAnomaly {
+  readonly responseTimeMs: number;
+  readonly baselineMeanMs: number;
+  readonly baselineStdDevMs: number;
+  readonly sampleCount: number;
+  readonly zScore: number;
+}
+
+/**
  * The facts of one event, identical for every channel it goes to.
  *
  * `id` is deterministic — the event and the incident it describes — so it is
@@ -154,6 +171,8 @@ export interface ChannelEventPayload {
     readonly incident: WebhookIncident | null;
     /** Set for `monitor.*` events: which auxiliary monitor raised it. */
     readonly monitor: WebhookMonitor | null;
+    /** Set for `website.degraded`: the response time and the baseline it broke. */
+    readonly anomaly: WebhookAnomaly | null;
     readonly dashboardUrl: string;
   };
 }

@@ -303,6 +303,14 @@ export interface WebsiteCheckDto {
   readonly errorType: CheckErrorType | null;
   readonly errorMessage: string | null;
   readonly redirectCount: number;
+  /**
+   * Whether this response time was unusual for this website: well above its
+   * rolling baseline by both standard deviations and ratio. Always false on a
+   * plan without anomaly detection, and for a failed check.
+   */
+  readonly anomalous: boolean;
+  /** Standard deviations above the baseline. Null when there was nothing to score. */
+  readonly zScore: number | null;
 }
 
 export interface UptimeStatsDto {

@@ -62,13 +62,17 @@ function plural(count: number, noun: string): string {
   return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
 }
 
+function milliseconds(value: number): string {
+  return `${String(Math.round(value))} ms`;
+}
+
 function toDate(iso: string | null): Date | null {
   return iso === null ? null : new Date(iso);
 }
 
 /** Reduces an event to what a person needs to read about it. */
 export function describeEvent(payload: ChannelEventPayload): ChannelMessage {
-  const { website, incident, monitor, dashboardUrl } = payload.data;
+  const { website, incident, monitor, anomaly, dashboardUrl } = payload.data;
   const name = website?.name ?? 'A website';
   const viewIncident = { label: 'View incident', url: dashboardUrl };
 
@@ -115,6 +119,49 @@ export function describeEvent(payload: ChannelEventPayload): ChannelMessage {
         facts,
         website,
         link: viewIncident,
+      };
+    }
+
+    case 'website.degraded': {
+      const facts: MessageFact[] = [];
+      if (anomaly) {
+        facts.push({ label: 'Response time', value: milliseconds(anomaly.responseTimeMs) });
+        facts.push({
+          label: 'Usual',
+          value: `${milliseconds(anomaly.baselineMeanMs)} ± ${String(anomaly.baselineStdDevMs)}`,
+        });
+        facts.push({ label: 'Deviation', value: `${anomaly.zScore.toFixed(1)}σ` });
+      }
+      const startedAt = toDate(incident?.startedAt ?? null);
+      if (startedAt) facts.push({ label: 'Slow since', value: startedAt });
+
+      return {
+        title: `${TONE_EMOJI.warning} ${name} is responding slowly`,
+        summary: incident?.detail ?? `${name} is answering far more slowly than usual.`,
+        tone: 'warning',
+        facts,
+        website,
+        link: { label: 'View website', url: dashboardUrl },
+      };
+    }
+
+    case 'website.degradation_resolved': {
+      const duration = incident?.durationSeconds ?? null;
+      const facts: MessageFact[] = [];
+      if (duration !== null) facts.push({ label: 'Slow for', value: formatDuration(duration) });
+      const resolvedAt = toDate(incident?.resolvedAt ?? null);
+      if (resolvedAt) facts.push({ label: 'Back to normal', value: resolvedAt });
+
+      return {
+        title: `${TONE_EMOJI.success} ${name} is back to its usual speed`,
+        summary:
+          duration === null
+            ? `Response times on ${name} are back to normal.`
+            : `Response times on ${name} are back to normal after ${formatDuration(duration)}.`,
+        tone: 'success',
+        facts,
+        website,
+        link: { label: 'View website', url: dashboardUrl },
       };
     }
 

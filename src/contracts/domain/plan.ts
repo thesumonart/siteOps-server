@@ -89,7 +89,6 @@ export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = [
   'status_pages',
   'api_access',
   'custom_domains',
-  'anomaly_detection',
   'ai_insights',
 ];
 

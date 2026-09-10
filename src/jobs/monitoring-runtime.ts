@@ -13,7 +13,9 @@ import { createLinksRunner } from '../monitoring/runners/links.runner.js';
 import { createPerformanceRunner } from '../monitoring/runners/performance.runner.js';
 import { createSeoRunner } from '../monitoring/runners/seo.runner.js';
 import { createSslRunner } from '../monitoring/runners/ssl.runner.js';
+import type { AnomalySettings } from '../monitoring/anomaly-detection.js';
 import { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
+import { PlanLookup } from '../monitoring/plan-lookup.js';
 import { ChannelRepository } from '../repositories/channel.repository.js';
 import { NotificationRepository } from '../repositories/notification.repository.js';
 import { ReportRepository } from '../repositories/report.repository.js';
@@ -77,6 +79,25 @@ const REPORT_LEASE_DURATION_MS = 10 * 60 * 1000;
  * first attempt was still waiting on it.
  */
 const CHANNEL_LEASE_DURATION_MS = env.CHANNEL_DELIVERY_TIMEOUT_MS + 30_000;
+
+/**
+ * How long the worker trusts what it last read about an organization's plan.
+ *
+ * Anomaly detection is a paid feature checked on every uptime check, and a
+ * minute is the delay after which an upgrade or downgrade takes effect there —
+ * short enough that nobody notices, long enough that the plan costs one read
+ * per organization per minute rather than one per check.
+ */
+const PLAN_CACHE_TTL_MS = 60_000;
+
+const ANOMALY_SETTINGS: AnomalySettings = {
+  windowSize: env.ANOMALY_WINDOW_SIZE,
+  minSamples: env.ANOMALY_MIN_SAMPLES,
+  zThreshold: env.ANOMALY_Z_THRESHOLD,
+  minRatio: env.ANOMALY_MIN_RATIO,
+  triggerChecks: env.ANOMALY_TRIGGER_CHECKS,
+  recoveryChecks: env.ANOMALY_RECOVERY_CHECKS,
+};
 
 /** Identifies our requests in a monitored site's own access log. */
 export const MONITOR_USER_AGENT = 'SiteOpsMonitor/1.0 (+https://siteops.app)';
@@ -191,9 +212,10 @@ export class MonitoringRuntime {
           maxAttempts: env.MONITOR_MAX_ATTEMPTS,
           allowLoopback: env.MONITOR_ALLOW_PRIVATE_ADDRESSES,
           userAgent: MONITOR_USER_AGENT,
+          anomaly: ANOMALY_SETTINGS,
         },
       },
-      { emailService, notifications, channels },
+      { emailService, notifications, channels, plans: new PlanLookup(PLAN_CACHE_TTL_MS) },
     );
 
     /*

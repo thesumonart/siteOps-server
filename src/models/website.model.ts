@@ -51,6 +51,21 @@ export interface WebsiteAttributes {
   currentIncidentId: Types.ObjectId | null;
 
   /**
+   * The rolling response-time window anomaly detection scores against: the
+   * last `ANOMALY_WINDOW_SIZE` successful response times, oldest first,
+   * trimmed by `$push` with `$slice` in the same write that records a check.
+   *
+   * Kept here for the reason the streak counters are — the worker already has
+   * this document in hand when it claims the website, so the baseline costs no
+   * query. At the default window it is a few hundred bytes.
+   */
+  responseTimeSamples: number[];
+  consecutiveAnomalies: number;
+  consecutiveNormalChecks: number;
+  /** Open anomaly incident, if any — the "degraded" state. */
+  currentAnomalyIncidentId: Types.ObjectId | null;
+
+  /**
    * The agency client this website belongs to, or null.
    *
    * Held here rather than as a list on the client, because a website has at
@@ -113,6 +128,10 @@ const websiteSchema = new Schema<WebsiteAttributes>(
     lastResponseTimeMs: { type: Number, default: null },
     lastStatusCode: { type: Number, default: null },
     currentIncidentId: { type: Schema.Types.ObjectId, ref: 'Incident', default: null },
+    responseTimeSamples: { type: [Number], default: [] },
+    consecutiveAnomalies: { type: Number, required: true, default: 0, min: 0 },
+    consecutiveNormalChecks: { type: Number, required: true, default: 0, min: 0 },
+    currentAnomalyIncidentId: { type: Schema.Types.ObjectId, ref: 'Incident', default: null },
     clientId: { type: Schema.Types.ObjectId, ref: 'Client', default: null },
   },
   { timestamps: true, collection: 'websites' },

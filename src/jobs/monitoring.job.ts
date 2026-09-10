@@ -1,8 +1,15 @@
 import type { EmailService } from '../email/email.service.js';
+import type { AnomalySettings } from '../monitoring/anomaly-detection.js';
 import type { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
 import { checkWebsiteWithRetries } from '../monitoring/check-with-retries.js';
 import type { CheckOptions } from '../monitoring/http-checker.js';
-import { notifyWebsiteDown, notifyWebsiteRecovered } from '../monitoring/notification-processor.js';
+import {
+  notifyWebsiteDegradationResolved,
+  notifyWebsiteDegraded,
+  notifyWebsiteDown,
+  notifyWebsiteRecovered,
+} from '../monitoring/notification-processor.js';
+import type { PlanLookup } from '../monitoring/plan-lookup.js';
 import { processCheckResult } from '../monitoring/result-processor.js';
 import { releaseAndReschedule, type ClaimedWebsite } from '../queues/monitoring.queue.js';
 import type { NotificationRepository } from '../repositories/notification.repository.js';
@@ -15,6 +22,7 @@ export interface MonitoringJobOptions {
   readonly maxAttempts: number;
   readonly allowLoopback: boolean;
   readonly userAgent: string;
+  readonly anomaly: AnomalySettings;
 }
 
 export interface MonitoringJobDependencies {
@@ -22,6 +30,8 @@ export interface MonitoringJobDependencies {
   readonly notifications: NotificationRepository;
   /** Queues Slack, Discord and webhook messages. Never sends inside the lease. */
   readonly channels: ChannelEventPublisher;
+  /** Answers "does this organization's plan include anomaly detection" without a query per check. */
+  readonly plans: PlanLookup;
 }
 
 /**
@@ -51,7 +61,10 @@ export async function runMonitoringJob(
     );
 
     const checkedAt = new Date();
-    const result = await processCheckResult(website, outcome, checkedAt);
+    const result = await processCheckResult(website, outcome, checkedAt, {
+      anomaly: options.anomaly,
+      plans: dependencies.plans,
+    });
 
     // A failed alert must never roll back the incident that triggered it — the
     // incident and check state are already durably written by the time either
@@ -90,6 +103,40 @@ export async function runMonitoringJob(
         dependencies.channels
           .websiteRecovered(website, resolvedId)
           .catch(logFailure('channel.recovery_publish_failed')),
+      ]);
+    }
+
+    // Degradation is told the same way, and separately from availability: one
+    // check can confirm both a recovery and the end of a slowdown.
+    const degradedId = result.anomaly.newlyOpenedIncidentId;
+    const restoredId = result.anomaly.newlyResolvedIncidentId;
+    const facts = result.anomaly.facts;
+
+    if (degradedId && facts) {
+      await Promise.all([
+        notifyWebsiteDegraded(
+          website,
+          degradedId,
+          facts,
+          result.anomaly.counters.consecutiveAnomalies,
+          dependencies.emailService,
+          dependencies.notifications,
+        ).catch(logFailure('notification.degraded_dispatch_failed')),
+        dependencies.channels
+          .websiteDegraded(website, degradedId, facts)
+          .catch(logFailure('channel.degraded_publish_failed')),
+      ]);
+    } else if (restoredId) {
+      await Promise.all([
+        notifyWebsiteDegradationResolved(
+          website,
+          restoredId,
+          dependencies.emailService,
+          dependencies.notifications,
+        ).catch(logFailure('notification.degradation_resolved_dispatch_failed')),
+        dependencies.channels
+          .websiteDegradationResolved(website, restoredId)
+          .catch(logFailure('channel.degradation_resolved_publish_failed')),
       ]);
     }
   } catch (error) {

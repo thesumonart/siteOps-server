@@ -45,6 +45,11 @@ export interface ClaimedWebsite {
   readonly consecutiveFailures: number;
   readonly consecutiveSuccesses: number;
   readonly currentIncidentId: Types.ObjectId | null;
+  /** The rolling response-time window, before this check is added to it. */
+  readonly responseTimeSamples: readonly number[];
+  readonly consecutiveAnomalies: number;
+  readonly consecutiveNormalChecks: number;
+  readonly currentAnomalyIncidentId: Types.ObjectId | null;
 }
 
 export interface MonitoringQueueOptions {
@@ -72,6 +77,13 @@ function toClaimedWebsite(doc: WebsiteAttributes & { _id: Types.ObjectId }): Cla
     consecutiveFailures: doc.consecutiveFailures,
     consecutiveSuccesses: doc.consecutiveSuccesses,
     currentIncidentId: doc.currentIncidentId,
+    // A lean read applies no schema defaults, and websites written before
+    // anomaly detection carry none of these fields. Absent means "no history
+    // yet", which is exactly what a fresh window and zeroed streaks say.
+    responseTimeSamples: doc.responseTimeSamples ?? [],
+    consecutiveAnomalies: doc.consecutiveAnomalies ?? 0,
+    consecutiveNormalChecks: doc.consecutiveNormalChecks ?? 0,
+    currentAnomalyIncidentId: doc.currentAnomalyIncidentId ?? null,
   };
 }
 

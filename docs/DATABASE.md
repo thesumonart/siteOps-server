@@ -88,6 +88,13 @@ silently entitling both.
 | `website_due_for_check`        | `{ nextCheckAt }` partial on `monitoringEnabled: true` | The scheduler's hot query. The partial filter keeps paused websites out of the index entirely.           |
 | `website_org_status`           | `{ organizationId, status }`                           | The dashboard status counters.                                                                           |
 
+A website also carries the anomaly-detection state: `responseTimeSamples`, the last
+`ANOMALY_WINDOW_SIZE` successful response times, trimmed by `$push` with `$slice` in the same write
+that records a check; `consecutiveAnomalies` and `consecutiveNormalChecks`; and
+`currentAnomalyIncidentId`. They live here for the reason the uptime counters do — the worker
+already holds this document when it claims the website, so the baseline costs no query. No index
+reads them, and at the default window they add a few hundred bytes.
+
 ### `website_checks`
 
 | Index                             | Keys                                            | Why                                                |
@@ -100,6 +107,9 @@ silently entitling both.
 The first two end in `_id` because the history is paged by a keyset cursor sorted on
 `(checkedAt, _id)`. Without `_id` in the index the database can satisfy the range but not the sort,
 and every page would scan a website's entire history to top-K sort twenty rows out of it.
+
+Each check also records `anomalous` and `zScore` — two small fields on the largest collection,
+never indexed, read only with the rest of a history page.
 
 ### `incidents`
 

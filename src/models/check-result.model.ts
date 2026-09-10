@@ -22,6 +22,10 @@ export interface WebsiteCheckAttributes {
   errorType: CheckErrorType | null;
   errorMessage: string | null;
   redirectCount: number;
+  /** Whether the response time was unusual for this website. See `anomaly-detection.ts`. */
+  anomalous: boolean;
+  /** Standard deviations above the rolling baseline, or null when nothing was scored. */
+  zScore: number | null;
 }
 
 export type WebsiteCheckDocument = HydratedDocument<WebsiteCheckAttributes>;
@@ -51,6 +55,8 @@ const websiteCheckSchema = new Schema<WebsiteCheckAttributes>(
     // Truncated on write; an upstream error page must never become a large document.
     errorMessage: { type: String, default: null, maxlength: 500 },
     redirectCount: { type: Number, required: true, default: 0, min: 0 },
+    anomalous: { type: Boolean, required: true, default: false },
+    zScore: { type: Number, default: null },
   },
   {
     // `createdAt` would duplicate `checkedAt` on a collection this size.

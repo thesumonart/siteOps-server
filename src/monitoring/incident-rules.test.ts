@@ -141,13 +141,23 @@ describe('decideIncidentTransition — a single flake mid-recovery does not reso
 describe('deriveDisplayStatus', () => {
   it('shows down whenever an incident is open, regardless of this check outcome', () => {
     expect(
-      deriveDisplayStatus({ checkStatus: 'up', responseTimeMs: 50, hasOpenIncidentAfter: true }),
+      deriveDisplayStatus({
+        checkStatus: 'up',
+        responseTimeMs: 50,
+        hasOpenIncidentAfter: true,
+        hasOpenAnomalyAfter: false,
+      }),
     ).toBe('down');
   });
 
   it('shows operational for a fast success with no open incident', () => {
     expect(
-      deriveDisplayStatus({ checkStatus: 'up', responseTimeMs: 200, hasOpenIncidentAfter: false }),
+      deriveDisplayStatus({
+        checkStatus: 'up',
+        responseTimeMs: 200,
+        hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
+      }),
     ).toBe('operational');
   });
 
@@ -157,6 +167,7 @@ describe('deriveDisplayStatus', () => {
         checkStatus: 'up',
         responseTimeMs: 2_000,
         hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
       }),
     ).toBe('degraded');
     expect(
@@ -164,6 +175,7 @@ describe('deriveDisplayStatus', () => {
         checkStatus: 'up',
         responseTimeMs: 1_999,
         hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
       }),
     ).toBe('operational');
   });
@@ -174,6 +186,7 @@ describe('deriveDisplayStatus', () => {
         checkStatus: 'down',
         responseTimeMs: null,
         hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
       }),
     ).toBe('degraded');
     expect(
@@ -181,13 +194,41 @@ describe('deriveDisplayStatus', () => {
         checkStatus: 'timeout',
         responseTimeMs: null,
         hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
       }),
     ).toBe('degraded');
   });
 
   it('treats a successful check with no recorded response time as operational, not degraded', () => {
     expect(
-      deriveDisplayStatus({ checkStatus: 'up', responseTimeMs: null, hasOpenIncidentAfter: false }),
+      deriveDisplayStatus({
+        checkStatus: 'up',
+        responseTimeMs: null,
+        hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: false,
+      }),
     ).toBe('operational');
+  });
+
+  it('shows degraded while a response-time anomaly is open, even through a fast check', () => {
+    expect(
+      deriveDisplayStatus({
+        checkStatus: 'up',
+        responseTimeMs: 120,
+        hasOpenIncidentAfter: false,
+        hasOpenAnomalyAfter: true,
+      }),
+    ).toBe('degraded');
+  });
+
+  it('shows down rather than degraded when both an outage and an anomaly are open', () => {
+    expect(
+      deriveDisplayStatus({
+        checkStatus: 'down',
+        responseTimeMs: null,
+        hasOpenIncidentAfter: true,
+        hasOpenAnomalyAfter: true,
+      }),
+    ).toBe('down');
   });
 });

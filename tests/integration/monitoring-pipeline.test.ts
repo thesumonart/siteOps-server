@@ -12,6 +12,7 @@ import {
   WebsiteModel,
 } from '../../src/models/index.js';
 import { ChannelEventPublisher } from '../../src/monitoring/channel-dispatch.js';
+import { PlanLookup } from '../../src/monitoring/plan-lookup.js';
 import { claimBatch } from '../../src/queues/monitoring.queue.js';
 import { ChannelRepository } from '../../src/repositories/channel.repository.js';
 import { NotificationRepository } from '../../src/repositories/notification.repository.js';
@@ -45,6 +46,14 @@ const JOB_OPTIONS = {
   maxAttempts: 1,
   allowLoopback: true,
   userAgent: 'SiteOpsMonitor/1.0 (test)',
+  anomaly: {
+    windowSize: 100,
+    minSamples: 30,
+    zThreshold: 3,
+    minRatio: 1.5,
+    triggerChecks: 3,
+    recoveryChecks: 3,
+  },
 } as const;
 
 const QUEUE_OPTIONS = { batchSize: 10, leaseDurationMs: 60_000 } as const;
@@ -128,6 +137,8 @@ async function tick(): Promise<void> {
         emailService: new EmailService(),
         notifications,
         channels,
+        // Uncached: each test seeds its own organization and plan.
+        plans: new PlanLookup(0),
       }),
     ),
   );

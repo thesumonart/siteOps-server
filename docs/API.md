@@ -537,6 +537,11 @@ drawing it as 0% uptime would invent an outage that never happened.
 Permission: `monitoring:read`. Query: `cursor`, `pageSize`, `status`. Cursor-paginated
 `WebsiteCheckDto`, newest first.
 
+Each check carries `anomalous` and `zScore`: whether its response time was unusual for this
+website, and by how many standard deviations above its rolling baseline. They are `false` and
+`null` for a failed check, before a website has 30 successful checks of history, and on a plan
+without anomaly detection. See docs/MONITORING.md.
+
 ### `GET /api/incidents`
 
 Permission: `incident:read`. Query: `cursor`, `pageSize`, `status`, `category`, `websiteId`.
@@ -906,13 +911,15 @@ instead — the origin and the last four characters, `https://hooks.slack.com/�
 
 Channel events are incident transitions, and use the same names as the rest of the product:
 
-| Event               | When                                          |
-| ------------------- | --------------------------------------------- |
-| `website.down`      | An availability incident opens                |
-| `website.recovered` | It resolves                                   |
-| `monitor.problem`   | An SSL, domain, performance, … incident opens |
-| `monitor.recovered` | It resolves                                   |
-| `channel.test`      | Only from `POST /test`; not subscribable      |
+| Event                          | When                                                           |
+| ------------------------------ | -------------------------------------------------------------- |
+| `website.down`                 | An availability incident opens                                 |
+| `website.recovered`            | It resolves                                                    |
+| `website.degraded`             | A response-time anomaly opens: still up, far slower than usual |
+| `website.degradation_resolved` | It resolves                                                    |
+| `monitor.problem`              | An SSL, domain, performance, … incident opens                  |
+| `monitor.recovered`            | It resolves                                                    |
+| `channel.test`                 | Only from `POST /test`; not subscribable                       |
 
 One message per channel per transition, never a repeat while a site stays down — guaranteed by a
 unique index, as for email.
@@ -1058,6 +1065,7 @@ X-SiteOps-Signature: t=1757491200,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0
       "lastErrorMessage": "Responded with HTTP 503."
     },
     "monitor": null,
+    "anomaly": null,
     "dashboardUrl": "https://app.siteops.app/dashboard/websites/…"
   },
   "metadata": { "environment": "production" }
@@ -1065,7 +1073,9 @@ X-SiteOps-Signature: t=1757491200,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0
 ```
 
 `id` is the same on every retry and on every channel, so a receiver subscribed twice can tell it
-heard about one transition twice. `data.monitor` is set for `monitor.*` events.
+heard about one transition twice. `data.monitor` is set for `monitor.*` events. `data.anomaly` is set for
+`website.degraded`: the response time that tipped it, the baseline mean and standard deviation it was
+judged against, the sample count and the z-score — enough to re-derive the verdict.
 
 **Verify before parsing.** The signature is HMAC-SHA256 over `${t}.${raw body}` with the channel's
 signing secret. Compute it over the bytes received — a parsed and re-serialised body will never

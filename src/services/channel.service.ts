@@ -275,6 +275,7 @@ export class ChannelService {
         website: null,
         incident: null,
         monitor: null,
+        anomaly: null,
         dashboardUrl: `${env.APP_URL}/dashboard`,
       },
     };

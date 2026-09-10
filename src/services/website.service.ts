@@ -213,10 +213,15 @@ export class WebsiteService {
       changes.canonicalKey = normalized.value.canonicalKey;
 
       // Pointing at a different address makes the accumulated failure and
-      // recovery counters meaningless, so the confirmation state restarts.
+      // recovery counters meaningless, so the confirmation state restarts. So
+      // does the response-time baseline: a hundred samples from the old host
+      // would call the new one anomalous — or excuse it — for no reason.
       if (normalized.value.canonicalKey !== existing.canonicalKey) {
         changes.consecutiveFailures = 0;
         changes.consecutiveSuccesses = 0;
+        changes.responseTimeSamples = [];
+        changes.consecutiveAnomalies = 0;
+        changes.consecutiveNormalChecks = 0;
         changes.status = existing.monitoringEnabled ? 'unknown' : 'paused';
         changes.nextCheckAt = new Date();
       }

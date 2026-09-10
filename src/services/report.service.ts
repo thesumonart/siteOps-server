@@ -228,5 +228,9 @@ export function toCheckDto(check: CheckRecord): WebsiteCheckDto {
     errorType: check.errorType,
     errorMessage: check.errorMessage,
     redirectCount: check.redirectCount,
+    // Checks recorded before anomaly detection carry neither field; they were
+    // never scored, which is what false and null say.
+    anomalous: check.anomalous ?? false,
+    zScore: check.zScore ?? null,
   };
 }

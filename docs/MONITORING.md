@@ -22,7 +22,9 @@ runMonitoringJob()      one per claimed website, concurrently
       │        ├─ derive counters           (streak in, streak out)
       │        ├─ decideIncidentTransition  (pure)
       │        ├─ applyIncidentTransition   (open / resolve / ongoing / none)
-      │        └─ update the website        (status, counters, last-* fields)
+      │        ├─ score the response time   (pure; against the rolling baseline)
+      │        ├─ decideAnomalyTransition   (pure; the degraded state)
+      │        └─ update the website        (status, counters, window, last-* fields)
       │
       ├─ notifyWebsiteDown / notifyWebsiteRecovered   only on a transition
       ├─ queue a delivery per Slack / Discord / webhook channel  (sent by its own loop)
@@ -154,13 +156,13 @@ _during this incident_, while the website's own consecutive counter resets on an
 
 ### Displayed status
 
-| Status        | Meaning                                    |
-| ------------- | ------------------------------------------ |
-| `operational` | Responding normally                        |
-| `degraded`    | Responding slowly (≥ 2s) or intermittently |
-| `down`        | An incident is open                        |
-| `paused`      | Monitoring is off                          |
-| `unknown`     | Awaiting the first check                   |
+| Status        | Meaning                                                         |
+| ------------- | --------------------------------------------------------------- |
+| `operational` | Responding normally                                             |
+| `degraded`    | Slow (≥ 2s), intermittent, or far slower than usual — see below |
+| `down`        | An incident is open                                             |
+| `paused`      | Monitoring is off                                               |
+| `unknown`     | Awaiting the first check                                        |
 
 Status follows **whether an incident is open**, not the raw pass/fail of the latest check. During a
 recovering-but-not-yet-confirmed window the site still reads `down`, because the incident is still
@@ -174,6 +176,77 @@ open and showing anything else would contradict the incidents page.
 site decommissioned mid-outage, or one held open by a check that will never succeed again. It sets
 `resolvedByUserId`, which is what distinguishes it from an automatic recovery in the history, and
 leaves the website's own status to the worker.
+
+## Response-time anomalies
+
+A website can be up and still be in trouble. A database under load, a failing dependency or a bad
+deploy usually shows first as a site that answers — just far more slowly than it normally does. The
+fixed 2-second threshold catches a site that is slow by anyone's standard; this catches one that is
+slow _for itself_. It is pure arithmetic in `anomaly-detection.ts`, exhaustively tested without a
+database, and the answer to "why did this fire" is always three numbers a person can check by hand.
+
+### The baseline
+
+Each website keeps a rolling window of its last `ANOMALY_WINDOW_SIZE` (100) successful response
+times on its own document, trimmed by `$push`/`$slice` in the write that records each check. Failed
+checks never enter it. Its mean and population standard deviation are the baseline. Nothing is
+scored until the window holds `ANOMALY_MIN_SAMPLES` (30): a new website is not slow, it is
+unmeasured.
+
+Each check is scored against the window as it stood **before** that check. A slow response
+averaged into its own baseline partly excuses itself.
+
+### When a check is anomalous
+
+`z = (response time − mean) / standard deviation`, and a check is anomalous only when **both**:
+
+- `z > ANOMALY_Z_THRESHOLD` (3) — unusual for this site. A site that ranges between 200 ms and 2 s
+  is not anomalous at 1.5 s.
+- `response time ≥ ANOMALY_MIN_RATIO × mean` (1.5) — meaningfully slower. A site that answers in
+  200 ± 3 ms scores z = 13 at 240 ms, and nobody wants to be told about 40 ms.
+
+Either alone produces alerts people learn to ignore. A perfectly steady site's spread is floored at
+1 ms so its score stays finite; the ratio is what stops it flagging a wobble. Every check records
+`anomalous` and `zScore`.
+
+### Degraded
+
+The same shape as outage confirmation, for the same reason: one slow response never pages anybody,
+and one fast one never declares it over.
+
+```text
+normal
+   │  ANOMALY_TRIGGER_CHECKS (3) anomalous checks in a row
+   ▼
+anomaly incident open  ──▶  status "degraded", one "website.degraded" alert
+   │  ANOMALY_RECOVERY_CHECKS (3) normal checks in a row
+   ▼
+resolved  ──▶  one "website.degradation_resolved" alert
+```
+
+The incident is category `anomaly`, type `response_time_anomaly`, severity `warning`: it can be open
+alongside an outage or an expiring certificate, and it never counts against uptime. Its detail line
+is the numbers behind the call — "Responding in 1840 ms, against a usual 310 ± 45 ms over the last
+100 checks." Alerts go by email to members with `anomalyDetected` on, and to every channel
+subscribed to the event, with the same two layers of idempotency as an outage.
+
+- **A site that is down is not degraded.** No anomaly opens while an availability incident is open,
+  and `down` outranks `degraded` in the displayed status. One already open stays open through an
+  outage; the checks after it decide whether the site came back slow.
+- **Failed checks move neither streak**, so a slow site that also drops the odd request can still be
+  declared degraded.
+- **The baseline adapts.** Slow responses enter the window, so a site that is permanently slower
+  after a deploy becomes its own new normal over about a hundred checks, and the incident resolves.
+  The 2-second threshold still marks it `degraded` if its new normal is slow by anyone's standard.
+- **Changing a website's URL resets the window**, which described another host.
+
+### The plan
+
+`anomaly_detection` is a plan feature. The worker reads plans through a one-minute cache
+(`PlanLookup`), so the check path gains no query, and a plan change takes effect there within a
+minute. On a plan without the feature nothing is scored, but the window is still kept, so an upgrade
+starts with a baseline rather than thirty checks of silence. A downgrade closes an open anomaly
+without an alert: nobody is paying to hear that it ended.
 
 ## Notifications
 
@@ -285,6 +358,12 @@ Every number comes from checks the worker actually performed.
 | `CHANNEL_DELIVERY_TIMEOUT_MS`            | 10000   | One attempt's timeout                                     |
 | `CHANNEL_DELIVERY_MAX_ATTEMPTS`          | 5       | Attempts per channel message, including the first         |
 | `CHANNEL_DELIVERY_RETRY_BASE_SECONDS`    | 30      | First retry delay; each later one is four times longer    |
+| `ANOMALY_WINDOW_SIZE`                    | 100     | Successful response times in the rolling baseline         |
+| `ANOMALY_MIN_SAMPLES`                    | 30      | History needed before anything is scored                  |
+| `ANOMALY_Z_THRESHOLD`                    | 3       | Standard deviations above the mean that count as unusual  |
+| `ANOMALY_MIN_RATIO`                      | 1.5     | Multiple of the mean a response must also reach           |
+| `ANOMALY_TRIGGER_CHECKS`                 | 3       | Anomalous checks in a row before "degraded"               |
+| `ANOMALY_RECOVERY_CHECKS`                | 3       | Normal checks in a row before it clears                   |
 | `CHECK_RETENTION_DAYS`                   | 90      | Raw check retention; baked into the TTL index             |
 | `MONITOR_ALLOW_PRIVATE_ADDRESSES`        | false   | Test-only. Refused in production.                         |
 

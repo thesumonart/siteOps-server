@@ -8,7 +8,11 @@ export const NOTIFICATION_EVENTS = [
   'incident.resolved',
   'monitor.problem',
   'monitor.recovered',
-  'anomaly.detected',
+  // A website still answering, but far more slowly than usual, and its end.
+  // `website.*` rather than `monitor.*`, because `monitor.*` names the
+  // auxiliary monitors' events and a receiver routes on that prefix.
+  'website.degraded',
+  'website.degradation_resolved',
   'report.ready',
 ] as const;
 

@@ -26,6 +26,7 @@ import {
   WebsiteModel,
 } from '../../src/models/index.js';
 import { ChannelEventPublisher } from '../../src/monitoring/channel-dispatch.js';
+import { PlanLookup } from '../../src/monitoring/plan-lookup.js';
 import type { ClaimedMonitor } from '../../src/queues/monitor.queue.js';
 import { claimDeliveryBatch } from '../../src/queues/channel-delivery.queue.js';
 import { claimBatch } from '../../src/queues/monitoring.queue.js';
@@ -62,6 +63,14 @@ const JOB_OPTIONS = {
   maxAttempts: 1,
   allowLoopback: true,
   userAgent: 'SiteOpsMonitor/1.0 (test)',
+  anomaly: {
+    windowSize: 100,
+    minSamples: 30,
+    zThreshold: 3,
+    minRatio: 1.5,
+    triggerChecks: 3,
+    recoveryChecks: 3,
+  },
 } as const;
 
 const DELIVERY_OPTIONS: ChannelDeliveryJobOptions = {
@@ -186,6 +195,7 @@ async function tick(): Promise<void> {
         emailService: new EmailService(),
         notifications,
         channels: publisher,
+        plans: new PlanLookup(0),
       }),
     ),
   );

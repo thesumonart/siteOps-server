@@ -38,6 +38,7 @@ function payload(
         lastErrorMessage: 'Responded with HTTP 503.',
       },
       monitor: null,
+      anomaly: null,
       dashboardUrl: 'https://app.siteops.test/dashboard/websites/site-1',
       ...data,
     },
@@ -98,6 +99,47 @@ describe('describing an event', () => {
     expect(warning.tone).toBe('warning');
     expect(warning.title).toContain('SSL certificate problem on Acme Store');
     expect(warning.summary).toBe('Certificate expires in 6 days');
+  });
+
+  it('explains a slowdown with the numbers behind it, as a warning rather than an outage', () => {
+    const message = describeEvent(
+      payload('website.degraded', {
+        anomaly: {
+          responseTimeMs: 1840,
+          baselineMeanMs: 310,
+          baselineStdDevMs: 45,
+          sampleCount: 100,
+          zScore: 34,
+        },
+      }),
+    );
+
+    expect(message.tone).toBe('warning');
+    expect(message.title).toContain('Acme Store is responding slowly');
+    expect(message.facts.slice(0, 3)).toEqual([
+      { label: 'Response time', value: '1840 ms' },
+      { label: 'Usual', value: '310 ms ± 45' },
+      { label: 'Deviation', value: '34.0σ' },
+    ]);
+  });
+
+  it('reports the end of a slowdown with how long it lasted', () => {
+    const resolved = payload('website.degradation_resolved');
+    const message = describeEvent({
+      ...resolved,
+      data: {
+        ...resolved.data,
+        incident: resolved.data.incident && {
+          ...resolved.data.incident,
+          status: 'resolved',
+          resolvedAt: RESOLVED_AT,
+          durationSeconds: 252,
+        },
+      },
+    });
+
+    expect(message.tone).toBe('success');
+    expect(message.summary).toBe('Response times on Acme Store are back to normal after 4m 12s.');
   });
 
   it('describes a test message without inventing a website', () => {

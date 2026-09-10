@@ -13,6 +13,7 @@ import {
   type IncidentStatus,
   type IncidentType,
   type Plan,
+  type WebhookAnomaly,
   type WebhookIncident,
   type WebhookMonitor,
   type WebhookWebsite,
@@ -55,6 +56,7 @@ export class ChannelEventPublisher {
     return this.publish('website.down', website.organizationId, incidentId, {
       website: websiteOf(website.id, website.name, website.url),
       monitor: null,
+      anomaly: null,
     });
   }
 
@@ -62,6 +64,30 @@ export class ChannelEventPublisher {
     return this.publish('website.recovered', website.organizationId, incidentId, {
       website: websiteOf(website.id, website.name, website.url),
       monitor: null,
+      anomaly: null,
+    });
+  }
+
+  websiteDegraded(
+    website: NotifiableWebsite,
+    incidentId: Types.ObjectId,
+    anomaly: WebhookAnomaly,
+  ): Promise<number> {
+    return this.publish('website.degraded', website.organizationId, incidentId, {
+      website: websiteOf(website.id, website.name, website.url),
+      monitor: null,
+      anomaly,
+    });
+  }
+
+  websiteDegradationResolved(
+    website: NotifiableWebsite,
+    incidentId: Types.ObjectId,
+  ): Promise<number> {
+    return this.publish('website.degradation_resolved', website.organizationId, incidentId, {
+      website: websiteOf(website.id, website.name, website.url),
+      monitor: null,
+      anomaly: null,
     });
   }
 
@@ -73,6 +99,7 @@ export class ChannelEventPublisher {
     return this.publish('monitor.problem', monitor.organizationId, incidentId, {
       website: websiteOf(monitor.websiteId, monitor.websiteName, monitor.websiteUrl),
       monitor: { type: monitor.type, status: result.status, summary: result.summary },
+      anomaly: null,
     });
   }
 
@@ -84,6 +111,7 @@ export class ChannelEventPublisher {
     return this.publish('monitor.recovered', monitor.organizationId, incidentId, {
       website: websiteOf(monitor.websiteId, monitor.websiteName, monitor.websiteUrl),
       monitor: { type: monitor.type, status: result.status, summary: result.summary },
+      anomaly: null,
     });
   }
 
@@ -92,7 +120,11 @@ export class ChannelEventPublisher {
     event: ChannelEvent,
     organizationId: Types.ObjectId,
     incidentId: Types.ObjectId,
-    subject: { readonly website: WebhookWebsite; readonly monitor: WebhookMonitor | null },
+    subject: {
+      readonly website: WebhookWebsite;
+      readonly monitor: WebhookMonitor | null;
+      readonly anomaly: WebhookAnomaly | null;
+    },
   ): Promise<number> {
     const channels = await this.subscribedChannels(organizationId, event);
     if (channels.length === 0) return 0;
@@ -111,6 +143,7 @@ export class ChannelEventPublisher {
         website: subject.website,
         incident,
         monitor: subject.monitor,
+        anomaly: subject.anomaly,
         dashboardUrl: `${env.APP_URL}/dashboard/websites/${subject.website.id}`,
       },
     };

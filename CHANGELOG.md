@@ -13,6 +13,23 @@ deployed together.
 
 ### Added
 
+- **Response-time anomaly detection and the degraded state.** Each website keeps a rolling window
+  of its last 100 successful response times. Every check is scored against the window as it stood
+  before it: anomalous when it is more than three standard deviations above the mean _and_ at least
+  1.5 times the mean, because either condition alone flags noise. Three anomalous checks in a row
+  open an `anomaly` incident (`response_time_anomaly`, severity `warning`) and show the website as
+  `degraded`; three normal ones resolve it. A site that is down is never also called degraded.
+  - New `website.degraded` and `website.degradation_resolved` events, by email (gated by the
+    existing `anomalyDetected` preference) and to notification channels, whose payload carries the
+    response time, baseline and z-score behind the call. They replace the never-emitted
+    `anomaly.detected`. Existing channels keep their subscription list and opt in explicitly.
+  - Checks record `anomalous` and `zScore`, returned on `WebsiteCheckDto`.
+  - Gated by the `anomaly_detection` plan feature, now released, read through a one-minute plan
+    cache so the check path gains no query. The window is kept on every plan, so an upgrade starts
+    with a baseline; a downgrade closes an open anomaly without an alert. Changing a website's URL
+    resets its baseline.
+  - `ANOMALY_WINDOW_SIZE`, `ANOMALY_MIN_SAMPLES`, `ANOMALY_Z_THRESHOLD`, `ANOMALY_MIN_RATIO`,
+    `ANOMALY_TRIGGER_CHECKS` and `ANOMALY_RECOVERY_CHECKS`, all with defaults.
 - **Slack, Discord and webhook notification channels.** An organization-level destination with its
   own event list, alongside per-person email. `GET/POST /api/channels`,
   `GET/PATCH/DELETE /api/channels/:id`, `POST .../test`, `POST .../rotate-secret` and

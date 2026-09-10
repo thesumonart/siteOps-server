@@ -1,9 +1,14 @@
 import type { Types } from 'mongoose';
 
 import { env } from '../config/env.js';
-import { formatDuration, type CheckErrorType } from '../contracts/index.js';
+import { formatDuration, type CheckErrorType, type WebhookAnomaly } from '../contracts/index.js';
 import type { EmailService } from '../email/email.service.js';
-import { websiteDownTemplate, websiteRecoveredTemplate } from '../email/templates/index.js';
+import {
+  websiteDegradationResolvedTemplate,
+  websiteDegradedTemplate,
+  websiteDownTemplate,
+  websiteRecoveredTemplate,
+} from '../email/templates/index.js';
 import { IncidentModel } from '../models/index.js';
 import type { NotificationRepository } from '../repositories/notification.repository.js';
 import { dispatchToRecipients, resolveRecipients } from './notification-dispatch.js';
@@ -129,6 +134,107 @@ export async function notifyWebsiteRecovered(
       body: `Resolved at ${incident.resolvedAt.toISOString()}. Was down for ${formatDuration(incident.durationSeconds)}.`,
     },
     content,
+    emailService,
+    notifications,
+  );
+}
+
+/**
+ * A website still answering, but far more slowly than it usually does.
+ *
+ * The same two layers of idempotency as an outage, on the anomaly incident:
+ * its own `downNotifiedAt`, claimed conditionally, and a dedupe key per
+ * recipient. Gated by the `anomalyDetected` preference, which a person can
+ * turn off without silencing outage alerts.
+ */
+export async function notifyWebsiteDegraded(
+  website: NotifiableWebsite,
+  incidentId: Types.ObjectId,
+  anomaly: WebhookAnomaly,
+  anomalousChecks: number,
+  emailService: EmailService,
+  notifications: NotificationRepository,
+): Promise<void> {
+  const claimed = await claimDispatch(incidentId, 'downNotifiedAt');
+  if (!claimed) return;
+
+  const recipients = await resolveRecipients(
+    website.organizationId,
+    'anomalyDetected',
+    notifications,
+  );
+  if (recipients.length === 0) return;
+
+  const dashboardUrl = `${env.APP_URL}/dashboard/websites/${website.id.toHexString()}`;
+
+  await dispatchToRecipients(
+    recipients,
+    {
+      organizationId: website.organizationId,
+      event: 'website.degraded',
+      websiteId: website.id,
+      incidentId,
+      dedupeScope: incidentId.toHexString(),
+      title: `${website.name} is responding slowly`,
+      body: `Responding in ${String(anomaly.responseTimeMs)} ms, against a usual ${String(anomaly.baselineMeanMs)} ± ${String(anomaly.baselineStdDevMs)} ms.`,
+    },
+    websiteDegradedTemplate({
+      websiteName: website.name,
+      websiteUrl: website.url,
+      responseTimeMs: anomaly.responseTimeMs,
+      baselineMeanMs: anomaly.baselineMeanMs,
+      baselineStdDevMs: anomaly.baselineStdDevMs,
+      sampleCount: anomaly.sampleCount,
+      anomalousChecks,
+      dashboardUrl,
+    }),
+    emailService,
+    notifications,
+  );
+}
+
+export async function notifyWebsiteDegradationResolved(
+  website: NotifiableWebsite,
+  incidentId: Types.ObjectId,
+  emailService: EmailService,
+  notifications: NotificationRepository,
+): Promise<void> {
+  const claimed = await claimDispatch(incidentId, 'recoveryNotifiedAt');
+  if (!claimed) return;
+
+  const incident = await IncidentModel.findById(incidentId)
+    .select({ resolvedAt: 1, durationSeconds: 1 })
+    .lean<{ resolvedAt: Date | null; durationSeconds: number | null }>()
+    .exec();
+  if (!incident?.resolvedAt || incident.durationSeconds === null) return;
+
+  const recipients = await resolveRecipients(
+    website.organizationId,
+    'anomalyDetected',
+    notifications,
+  );
+  if (recipients.length === 0) return;
+
+  const dashboardUrl = `${env.APP_URL}/dashboard/websites/${website.id.toHexString()}`;
+
+  await dispatchToRecipients(
+    recipients,
+    {
+      organizationId: website.organizationId,
+      event: 'website.degradation_resolved',
+      websiteId: website.id,
+      incidentId,
+      dedupeScope: incidentId.toHexString(),
+      title: `${website.name} is back to its usual speed`,
+      body: `Response times are back to normal. It was slow for ${formatDuration(incident.durationSeconds)}.`,
+    },
+    websiteDegradationResolvedTemplate({
+      websiteName: website.name,
+      websiteUrl: website.url,
+      resolvedAt: incident.resolvedAt,
+      durationSeconds: incident.durationSeconds,
+      dashboardUrl,
+    }),
     emailService,
     notifications,
   );

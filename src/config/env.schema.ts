@@ -169,6 +169,23 @@ export const envSchema = z
      */
     CHANNEL_DELIVERY_RETRY_BASE_SECONDS: z.coerce.number().int().min(1).max(3_600).default(30),
 
+    /* --- Response-time anomaly detection --------------------------------
+     *
+     * Each website keeps its last ANOMALY_WINDOW_SIZE successful response
+     * times; a check is anomalous when it sits more than ANOMALY_Z_THRESHOLD
+     * standard deviations above their mean *and* is at least ANOMALY_MIN_RATIO
+     * times that mean. ANOMALY_TRIGGER_CHECKS anomalous checks in a row declare
+     * the site degraded; ANOMALY_RECOVERY_CHECKS normal ones declare it over.
+     * See docs/MONITORING.md for why both conditions are required.
+     */
+    ANOMALY_WINDOW_SIZE: z.coerce.number().int().min(20).max(500).default(100),
+    /** Samples needed before a baseline exists. Nothing is scored before that. */
+    ANOMALY_MIN_SAMPLES: z.coerce.number().int().min(5).max(500).default(30),
+    ANOMALY_Z_THRESHOLD: z.coerce.number().min(1).max(10).default(3),
+    ANOMALY_MIN_RATIO: z.coerce.number().min(1).max(10).default(1.5),
+    ANOMALY_TRIGGER_CHECKS: z.coerce.number().int().min(1).max(20).default(3),
+    ANOMALY_RECOVERY_CHECKS: z.coerce.number().int().min(1).max(20).default(3),
+
     /** How often the worker looks for queued reports and due schedules. */
     REPORT_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
     /** Reports built per tick. Each is a burst of aggregation, not a network call. */
@@ -282,6 +299,16 @@ export const envSchema = z
         code: 'custom',
         path: ['STRIPE_SECRET_KEY'],
         message: 'A live Stripe key must not be used outside production. Use a sk_test_ key.',
+      });
+    }
+    // A window shorter than the history a baseline needs would never produce
+    // one, and anomaly detection would silently never fire.
+    if (value.ANOMALY_MIN_SAMPLES > value.ANOMALY_WINDOW_SIZE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ANOMALY_MIN_SAMPLES'],
+        message:
+          'ANOMALY_MIN_SAMPLES must not exceed ANOMALY_WINDOW_SIZE, or no baseline is ever formed.',
       });
     }
     if (value.NODE_ENV === 'production' && value.MONITOR_ALLOW_PRIVATE_ADDRESSES) {
