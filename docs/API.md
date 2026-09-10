@@ -1100,6 +1100,126 @@ export function verifySiteOpsSignature(rawBody, header, secret, toleranceSeconds
 
 ---
 
+## Public API
+
+`/api/v1` is for integrations — a script, Terraform, a status board — and authenticates with an
+**API key and nothing else**. A session cookie is not consulted there at all, so a page a signed-in
+admin visits cannot use their cookie to call it; the dashboard's own routes stay under `/api` and
+never accept a key.
+
+It is versioned where `/api` is not: the dashboard ships with this API, and somebody's script does
+not. The envelope, the DTOs, the validation and every plan limit are the dashboard's own — each route
+calls the same service — so an integration cannot do anything the dashboard would refuse. Available
+on plans with `api_access` (Agency and Pro).
+
+### Keys
+
+Managed with a session, from the dashboard. Permissions `api_key:read` / `api_key:manage` — admins
+and owners. A key can never be used to manage keys.
+
+#### `GET /api/api-keys`
+
+`{ "items": ApiKeyDto[] }`, newest first: the 100 most recent, revoked ones included.
+
+```json
+{
+  "id": "…",
+  "name": "Terraform",
+  "prefix": "so_live_Ab12Cd34",
+  "scopes": ["monitors:read", "monitors:write"],
+  "status": "active",
+  "createdByName": "Ada",
+  "lastUsedAt": "2026-09-10T08:00:00.000Z",
+  "expiresAt": null,
+  "revokedAt": null,
+  "createdAt": "…"
+}
+```
+
+`lastUsedAt` is refreshed at most once a minute. `status` is `active`, `expired` or `revoked`.
+
+#### `POST /api/api-keys`
+
+Body: `{ name, scopes, expiresInDays? }` — `expiresInDays` from 1 to 365, or omitted for a key that
+works until it is revoked. `201` with `{ apiKey, token }`. **`token` is shown once**, here; only its
+SHA-256 is stored, so neither a leaked backup nor this API can produce it again. Counts against
+`maxApiKeys`; revoked and expired keys do not.
+
+A person can only grant scopes whose permissions their own role holds, so a key cannot be how a
+lesser role acts with a greater one's reach.
+
+#### `POST /api/api-keys/:apiKeyId/rotate`
+
+`{ apiKey, token }` with a new secret; name, scopes and expiry are kept. The old secret stops working
+in the same write — there is no overlap, because a key is rotated when it may have leaked. A revoked
+or expired key cannot be rotated (`409`).
+
+#### `DELETE /api/api-keys/:apiKeyId`
+
+Revokes the key. `204`, and idempotent. The document is kept so the audit log still resolves.
+
+### Authenticating
+
+```http
+GET /api/v1/monitors HTTP/1.1
+Authorization: Bearer so_live_…
+```
+
+Every failure to authenticate — a missing, malformed, unknown, revoked or expired key — is the same
+`401 API_KEY_INVALID`, with `WWW-Authenticate: Bearer`. Which it was is not something to tell a
+caller looking for a key that works. The organization is the key's own: there is no
+`X-Organization-Id` on this surface, and one sent is ignored. After a downgrade to a plan without API
+access, keys answer `403 PLAN_LIMIT_REACHED` until the plan returns; they are not deleted.
+
+### Scopes
+
+| Scope             | Allows                                        |
+| ----------------- | --------------------------------------------- |
+| `monitors:read`   | Listing and reading monitors                  |
+| `monitors:write`  | Creating, changing, pausing and deleting them |
+| `checks:read`     | A monitor's check history                     |
+| `incidents:read`  | Listing and reading incidents                 |
+| `incidents:write` | Resolving an incident                         |
+| `metrics:read`    | Uptime, response-time and summary metrics     |
+
+A route whose scope the key does not carry answers `403 INSUFFICIENT_SCOPE`.
+
+### Budgets
+
+Two, both checked before a route runs:
+
+- **Per key, per minute** — `API_KEY_RATE_LIMIT_PER_MINUTE` (120). Keyed by the key rather than the
+  address, so integrations behind one cloud egress IP do not throttle each other. `429 RATE_LIMITED`
+  with `Retry-After`, and the usual `RateLimit-*` headers.
+- **Per organization, per UTC day** — the plan's `apiRequestsPerDay`, counted in the database and
+  shared by all of the organization's keys. Every response carries `X-Quota-Limit` and
+  `X-Quota-Remaining`; past it, `429 API_QUOTA_EXCEEDED` with `Retry-After` until midnight UTC.
+
+### Routes
+
+| Method and path                      | Scope             | Same as                           |
+| ------------------------------------ | ----------------- | --------------------------------- |
+| `GET /api/v1/monitors`               | `monitors:read`   | `GET /api/websites`               |
+| `POST /api/v1/monitors`              | `monitors:write`  | `POST /api/websites`              |
+| `GET /api/v1/monitors/:id`           | `monitors:read`   | `GET /api/websites/:id`           |
+| `PATCH /api/v1/monitors/:id`         | `monitors:write`  | `PATCH /api/websites/:id`         |
+| `DELETE /api/v1/monitors/:id`        | `monitors:write`  | `DELETE /api/websites/:id`        |
+| `POST /api/v1/monitors/:id/pause`    | `monitors:write`  | `POST /api/websites/:id/pause`    |
+| `POST /api/v1/monitors/:id/resume`   | `monitors:write`  | `POST /api/websites/:id/resume`   |
+| `GET /api/v1/monitors/:id/checks`    | `checks:read`     | `GET /api/websites/:id/checks`    |
+| `GET /api/v1/monitors/:id/stats`     | `metrics:read`    | `GET /api/websites/:id/stats`     |
+| `GET /api/v1/monitors/:id/uptime`    | `metrics:read`    | `GET /api/websites/:id/uptime`    |
+| `GET /api/v1/metrics/summary`        | `metrics:read`    | `GET /api/dashboard/stats`        |
+| `GET /api/v1/incidents`              | `incidents:read`  | `GET /api/incidents`              |
+| `GET /api/v1/incidents/:id`          | `incidents:read`  | `GET /api/incidents/:id`          |
+| `POST /api/v1/incidents/:id/resolve` | `incidents:write` | `POST /api/incidents/:id/resolve` |
+
+Query parameters, bodies and responses are exactly those of the dashboard route in the last column.
+"Monitor" is the public name for a website's uptime monitor. Writes are audited, and the audit log
+names the key — `API key “Terraform”` — as well as the person who issued it.
+
+---
+
 ## Error codes
 
 | Code                            | Typical status | Meaning                                              |
@@ -1137,6 +1257,10 @@ export function verifySiteOpsSignature(rawBody, header, secret, toleranceSeconds
 | `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                 |
 | `CHANNEL_NOT_FOUND`             | 404            | No such channel, or not yours                        |
 | `CHANNEL_NAME_TAKEN`            | 409            | A channel with that name already exists              |
+| `API_KEY_NOT_FOUND`             | 404            | No such API key, or not yours                        |
+| `API_KEY_INVALID`               | 401            | Missing, malformed, unknown, revoked or expired key  |
+| `INSUFFICIENT_SCOPE`            | 403            | The key does not carry the route's scope             |
+| `API_QUOTA_EXCEEDED`            | 429            | The organization's daily API quota is used up        |
 | `REPORT_NOT_FOUND`              | 404            | No such report, or not yours                         |
 | `REPORT_NOT_READY`              | 409            | Report is still generating, or failed                |
 | `REPORT_SCHEDULE_NOT_FOUND`     | 404            | No such schedule, or not yours                       |

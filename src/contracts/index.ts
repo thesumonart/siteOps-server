@@ -21,6 +21,7 @@ export * from './api/dto.js';
 export * from './api/errors.js';
 export * from './api/pagination.js';
 
+export * from './domain/api-key.js';
 export * from './domain/audit.js';
 export * from './domain/billing.js';
 export * from './domain/channel.js';
@@ -35,6 +36,7 @@ export * from './domain/report.js';
 export * from './domain/roles.js';
 export * from './domain/website.js';
 
+export * from './schemas/api-key.js';
 export * from './schemas/audit.js';
 export * from './schemas/auth.js';
 export * from './schemas/billing.js';

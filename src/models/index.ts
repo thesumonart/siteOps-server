@@ -14,6 +14,8 @@
  * must not be renamed casually.
  */
 
+export * from './api-key.model.js';
+export * from './api-usage.model.js';
 export * from './audit-log.model.js';
 export * from './billing-event.model.js';
 export * from './channel-delivery.model.js';

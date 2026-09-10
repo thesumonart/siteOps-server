@@ -157,6 +157,9 @@ export function errorHandler(
       status: statusCode,
       code: body.code,
       userId: request.auth?.user.id,
+      // A public API request has a key rather than a user; its id is what an
+      // operator needs to tell an integration's failures from anyone else's.
+      apiKeyId: request.apiKey?.id,
       organizationId: request.organization?.id,
       // The full error, stack included, is logged only server-side.
       err: error instanceof Error ? error : new Error(String(error)),

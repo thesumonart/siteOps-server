@@ -1,3 +1,4 @@
+import { type ApiKeyScope, type ApiKeyStatus } from '../domain/api-key.js';
 import { type AuditAction, type AuditArea } from '../domain/audit.js';
 import { type BillingInterval, type SubscriptionStatus } from '../domain/billing.js';
 import {
@@ -431,6 +432,33 @@ export interface ChannelDeliveryDto {
   /** When the next retry is due. Null once the delivery has succeeded or given up. */
   readonly nextAttemptAt: string | null;
   readonly deliveredAt: string | null;
+}
+
+/**
+ * An API key as the settings screen lists it.
+ *
+ * The key itself is never here. Only its hash is stored; `prefix` — the first
+ * sixteen characters, `so_live_` and eight more — is enough to match a key in a
+ * list against one in a config file, and nowhere near enough to use.
+ */
+export interface ApiKeyDto {
+  readonly id: string;
+  readonly name: string;
+  readonly prefix: string;
+  readonly scopes: readonly ApiKeyScope[];
+  readonly status: ApiKeyStatus;
+  readonly createdByName: string;
+  /** Updated at most once a minute, so it is "roughly when", not an access log. */
+  readonly lastUsedAt: string | null;
+  readonly expiresAt: string | null;
+  readonly revokedAt: string | null;
+  readonly createdAt: string;
+}
+
+/** The one response that carries the key, on creation or rotation. It is not shown again. */
+export interface IssuedApiKeyDto {
+  readonly apiKey: ApiKeyDto;
+  readonly token: string;
 }
 
 /** The outcome of sending a test message, answered synchronously. */

@@ -1,3 +1,5 @@
+import type { ApiKeyScope } from '../contracts/index.js';
+
 /**
  * The authenticated principal, as resolved from the session cookie.
  *
@@ -20,6 +22,21 @@ export interface AuthenticatedSession {
 export interface RequestAuthContext {
   readonly user: AuthenticatedUser;
   readonly session: AuthenticatedSession;
+}
+
+/**
+ * The API key a public API request authenticated with.
+ *
+ * Set only by `requireApiKey`, only on `/api/v1`. A request there never has a
+ * session: the key is the whole of its identity, and `scopes` are the whole of
+ * what it may do.
+ */
+export interface ApiKeyContext {
+  readonly id: string;
+  readonly name: string;
+  readonly scopes: readonly ApiKeyScope[];
+  /** The person who issued the key. Audit entries name them, alongside the key. */
+  readonly createdByUserId: string;
 }
 
 /** What an audited action records about who performed it. */

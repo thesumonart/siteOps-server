@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import type { OrganizationRepository } from '../repositories/organization.repository.js';
+import type { ApiKeyService } from '../services/api-key.service.js';
 import type { AuditService } from '../services/audit.service.js';
 import type { AuthService } from '../services/auth.service.js';
 import type { BillingService } from '../services/billing.service.js';
@@ -16,6 +17,7 @@ import type { OrganizationService } from '../services/organization.service.js';
 import type { ReportGenerationService } from '../services/report-generation.service.js';
 import type { ReportService } from '../services/report.service.js';
 import type { WebsiteService } from '../services/website.service.js';
+import { apiKeyRoutes } from './api-key.routes.js';
 import { auditRoutes } from './audit.routes.js';
 import { authRoutes } from './auth.routes.js';
 import { billingRoutes } from './billing.routes.js';
@@ -39,6 +41,7 @@ import { websiteRoutes } from './website.routes.js';
  */
 export interface ApiDependencies {
   readonly organizations: OrganizationRepository;
+  readonly apiKeyService: ApiKeyService;
   readonly authService: AuthService;
   readonly auditService: AuditService;
   readonly billingService: BillingService;
@@ -68,6 +71,7 @@ export function apiRoutes(dependencies: ApiDependencies): Router {
   router.use(incidentRoutes(dependencies));
   router.use(notificationRoutes(dependencies));
   router.use(channelRoutes(dependencies));
+  router.use(apiKeyRoutes(dependencies));
   router.use(auditRoutes(dependencies));
   router.use(clientRoutes(dependencies));
   router.use(billingRoutes(dependencies));

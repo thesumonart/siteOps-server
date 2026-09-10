@@ -13,6 +13,20 @@ deployed together.
 
 ### Added
 
+- **Public API and API keys.** `/api/v1` exposes monitors, their checks and metrics, and incidents
+  to integrations, authenticated with an API key and never a session. Every route calls the service
+  the dashboard's route does, so validation, plan limits and tenant isolation are the same.
+  - Keys are `so_live_` followed by 256 random bits, shown once and stored as SHA-256. Scopes —
+    `monitors:read`, `monitors:write`, `checks:read`, `incidents:read`, `incidents:write`,
+    `metrics:read` — are checked per route, and a person can only grant scopes their own role covers.
+  - `GET` and `POST /api/api-keys`, `POST /api/api-keys/:id/rotate` and `DELETE /api/api-keys/:id`
+    from the dashboard, behind the new `api_key:read` and `api_key:manage` permissions (admins and
+    owners). Rotation has no overlap; revoked keys are kept for the audit trail.
+  - A per-key rate limit (`API_KEY_RATE_LIMIT_PER_MINUTE`, default 120) and the plan's
+    `apiRequestsPerDay`, counted durably per UTC day in the new `api_usage` collection and reported
+    in `X-Quota-*` headers.
+  - Gated by the `api_access` plan feature, now released. Two new collections need
+    `pnpm indexes:sync`.
 - **Response-time anomaly detection and the degraded state.** Each website keeps a rolling window
   of its last 100 successful response times. Every check is scored against the window as it stood
   before it: anomalous when it is more than three standard deviations above the mean _and_ at least

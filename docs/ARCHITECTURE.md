@@ -97,6 +97,12 @@ The dashboard addresses `/api/...` directly. Versioning today would be a breakin
 screen for no present benefit. When a second version is genuinely needed it can be mounted
 alongside this one.
 
+That second surface now exists, for a different client. `/api/v1` is the public API, for
+integrations authenticated with API keys (`src/routes/public-api.routes.ts`). It is versioned
+because somebody's script does not ship with this repository the way the dashboard does. It is a
+thin layer — every route calls the service the dashboard's route calls — and it never accepts a
+session, which is why it is its own router mounted ahead of `/api` rather than a prefix inside it.
+
 ### Authentication is Better Auth, mounted as raw middleware
 
 Password hashing, session issuing and token lifecycles are delegated to Better Auth rather than

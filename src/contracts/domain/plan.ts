@@ -87,7 +87,6 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
  */
 export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = [
   'status_pages',
-  'api_access',
   'custom_domains',
   'ai_insights',
 ];
@@ -124,7 +123,12 @@ export interface PlanLimits {
   readonly maxIntegrations: number;
   readonly maxReportSchedules: number;
   readonly maxCustomDomains: number;
-  /** Requests an organization's API keys may make per rolling day, in total. */
+  /**
+   * Requests an organization's API keys may make per UTC day, in total. A
+   * calendar day rather than a rolling one: the counter is one document per
+   * organization per day, and "resets at midnight UTC" is a limit a customer
+   * can plan against.
+   */
   readonly apiRequestsPerDay: number;
   /** Upper bound on pages one broken-link crawl may fetch. */
   readonly maxCrawlPages: number;

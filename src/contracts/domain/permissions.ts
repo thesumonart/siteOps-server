@@ -27,6 +27,8 @@ export const PERMISSIONS = [
   'notification:update',
   'integration:read',
   'integration:manage',
+  'api_key:read',
+  'api_key:manage',
   'audit_log:read',
   'client:read',
   'client:manage',
@@ -66,6 +68,11 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   // Members keep their own email preferences and nothing here.
   'integration:read',
   'integration:manage',
+  // An API key acts for the whole organization, from outside it, for as long
+  // as it lives. Issuing one is an admin decision, and what it may carry is
+  // capped at the issuer's own permissions — see API_KEY_SCOPE_PERMISSIONS.
+  'api_key:read',
+  'api_key:manage',
   'client:read',
   'client:manage',
   'report:create',

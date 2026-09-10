@@ -90,6 +90,15 @@ export const envSchema = z
      * share one address, which in practice means an end-to-end suite.
      */
     SESSION_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(1).default(60),
+    /**
+     * Requests one API key may make per minute on `/api/v1`.
+     *
+     * Per key rather than per address, because an integration's address says
+     * nothing about who it is — several customers' scripts can share one cloud
+     * egress IP. This smooths bursts; the plan's daily quota is the billing
+     * limit and is counted in the database.
+     */
+    API_KEY_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(120),
 
     /** Trust `X-Forwarded-For` only behind a proxy that actually sets it. */
     TRUST_PROXY: booleanFromEnv.default(false),

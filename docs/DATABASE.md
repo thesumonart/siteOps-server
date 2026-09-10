@@ -9,24 +9,26 @@ constraint in the initial deployment.
 Collection names are a **compatibility surface**, not an implementation detail: the dashboard's
 end-to-end suite cleans up by addressing them directly. They are not renamed casually.
 
-| Collection              | Model file                       | Owner      | What it holds                                   |
-| ----------------------- | -------------------------------- | ---------- | ----------------------------------------------- |
-| `user`                  | `user.model.ts`                  | auth layer | Accounts. Read-only from application code.      |
-| `session`               | —                                | auth layer | Active sessions.                                |
-| `account`               | —                                | auth layer | Credentials.                                    |
-| `verification`          | —                                | auth layer | Email and reset tokens.                         |
-| `organizations`         | `organization.model.ts`          | app        | Tenants.                                        |
-| `organization_members`  | `organization-member.model.ts`   | app        | Who may act where, and as what.                 |
-| `invitations`           | `invitation.model.ts`            | app        | Pending invitations, keyed by address.          |
-| `websites`              | `website.model.ts`               | app        | Monitored sites **and** their monitor state.    |
-| `website_checks`        | `check-result.model.ts`          | app        | One document per check. The largest collection. |
-| `incidents`             | `incident.model.ts`              | app        | Confirmed outages.                              |
-| `notifications`         | `notification.model.ts`          | app        | One delivery record per recipient per event.    |
-| `notification_settings` | `notification-settings.model.ts` | app        | Per-user, per-organization alert rules.         |
-| `notification_channels` | `notification-channel.model.ts`  | app        | Slack, Discord and webhook destinations.        |
-| `channel_deliveries`    | `channel-delivery.model.ts`      | app        | One event owed to one channel. Also a queue.    |
-| `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                               |
-| `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.           |
+| Collection              | Model file                       | Owner      | What it holds                                     |
+| ----------------------- | -------------------------------- | ---------- | ------------------------------------------------- |
+| `user`                  | `user.model.ts`                  | auth layer | Accounts. Read-only from application code.        |
+| `session`               | —                                | auth layer | Active sessions.                                  |
+| `account`               | —                                | auth layer | Credentials.                                      |
+| `verification`          | —                                | auth layer | Email and reset tokens.                           |
+| `organizations`         | `organization.model.ts`          | app        | Tenants.                                          |
+| `organization_members`  | `organization-member.model.ts`   | app        | Who may act where, and as what.                   |
+| `invitations`           | `invitation.model.ts`            | app        | Pending invitations, keyed by address.            |
+| `websites`              | `website.model.ts`               | app        | Monitored sites **and** their monitor state.      |
+| `website_checks`        | `check-result.model.ts`          | app        | One document per check. The largest collection.   |
+| `incidents`             | `incident.model.ts`              | app        | Confirmed outages.                                |
+| `notifications`         | `notification.model.ts`          | app        | One delivery record per recipient per event.      |
+| `notification_settings` | `notification-settings.model.ts` | app        | Per-user, per-organization alert rules.           |
+| `notification_channels` | `notification-channel.model.ts`  | app        | Slack, Discord and webhook destinations.          |
+| `channel_deliveries`    | `channel-delivery.model.ts`      | app        | One event owed to one channel. Also a queue.      |
+| `api_keys`              | `api-key.model.ts`               | app        | Public API keys, by hash.                         |
+| `api_usage`             | `api-usage.model.ts`             | app        | Public API requests per organization per UTC day. |
+| `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                                 |
+| `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.             |
 
 Two file names read differently from their collections, and both are deliberate:
 `check-result.model.ts` compiles `WebsiteCheckModel` over `website_checks`, and the notification
@@ -233,6 +235,28 @@ the website list and the uptime queue.
 `payload` is a snapshot of the facts at the moment of the transition, not a reference to them: a
 retry an hour later describes the outage as it was when it started.
 
+### `api_keys`
+
+Only the SHA-256 of a key is stored — the treatment invitation tokens get, for the same reason: a
+key is a bearer credential, and a leaked database must not yield working ones. Revoked keys keep
+their document, so the audit log still resolves.
+
+| Index                       | Keys                                | Why                                             |
+| --------------------------- | ----------------------------------- | ----------------------------------------------- |
+| `api_key_token_hash_unique` | `{ tokenHash }` unique              | Authenticates a public API request in one read. |
+| `api_key_org_created_at`    | `{ organizationId, createdAt: -1 }` | The settings list.                              |
+
+### `api_usage`
+
+One counter per organization per UTC day. The plan's `apiRequestsPerDay` is a billing limit, so it
+is counted durably here rather than in the per-process rate limiter, which forgets on restart and
+is multiplied by the number of API instances.
+
+| Index                      | Keys                             | Why                                                                                                            |
+| -------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `api_usage_org_day_unique` | `{ organizationId, day }` unique | The counter's key. The upsert filters on exactly this, so concurrent first requests of a day share a document. |
+| `api_usage_ttl`            | `{ dayStart: 1 }`, 35 days       | Retention.                                                                                                     |
+
 ### `audit_logs`
 
 | Index                  | Keys                                | Why                |
@@ -338,6 +362,7 @@ Monitoring data grows fast: one website on a one-minute interval writes 525,600 
 | `reports`                           | 365 days                           | `report_ttl` TTL index |
 | `audit_logs`                        | 365 days                           | `audit_ttl` TTL index  |
 | `channel_deliveries`                | 30 days                            | `delivery_ttl` TTL     |
+| `api_usage`                         | 35 days                            | `api_usage_ttl` TTL    |
 | `session`, `verification`           | their own `expiresAt`              | TTL index at 0         |
 | `incidents`, `websites`, membership | kept                               | —                      |
 

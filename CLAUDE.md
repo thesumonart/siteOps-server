@@ -155,7 +155,8 @@ renamed field until a screen breaks in front of someone, so these are load-beari
 
 - The response envelope is `{ success, data }`. Not negotiable — `apiRequest` in the dashboard
   parses exactly that.
-- The prefix is `/api`, not `/api/v1`.
+- The dashboard's prefix is `/api`, not `/api/v1`. `/api/v1` is the public API for API keys — a
+  separate router that never accepts a session — and nothing the dashboard calls lives under it.
 - The session cookie is `siteops.session_token`. The dashboard's routing middleware matches it by
   name; renaming it signs everyone out.
 - The email-verification token is an HS256 JWT over `{ email }` signed with `AUTH_SECRET`. The

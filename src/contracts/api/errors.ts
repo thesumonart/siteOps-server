@@ -45,6 +45,14 @@ export const API_ERROR_CODES = [
   'CHANNEL_NOT_FOUND',
   'CHANNEL_NAME_TAKEN',
 
+  // The public API. `API_KEY_INVALID` is deliberately one code for a key that
+  // is malformed, unknown, revoked or expired: telling them apart helps nobody
+  // but somebody guessing.
+  'API_KEY_NOT_FOUND',
+  'API_KEY_INVALID',
+  'INSUFFICIENT_SCOPE',
+  'API_QUOTA_EXCEEDED',
+
   'CLIENT_NOT_FOUND',
   'CLIENT_NAME_TAKEN',
   'CLIENT_HAS_PORTAL_USERS',

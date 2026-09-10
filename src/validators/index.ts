@@ -12,6 +12,7 @@
  * contract, because a browser has nothing to validate about them.
  */
 
+export * from './api-key.validator.js';
 export * from './audit.validator.js';
 export * from './billing.validator.js';
 export * from './channel.validator.js';

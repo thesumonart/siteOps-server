@@ -1,5 +1,7 @@
 import { syncAuthIndexes } from './auth-indexes.js';
 import {
+  ApiKeyModel,
+  ApiUsageModel,
   AuditLogModel,
   BillingEventModel,
   ChannelDeliveryModel,
@@ -66,6 +68,13 @@ export const MANAGED_MODELS = [
    */
   NotificationChannelModel,
   ChannelDeliveryModel,
+  /*
+   * The token-hash index is what authenticates a public API request in one
+   * read, and the usage index is what makes the daily quota one document per
+   * organization per day. Without either, the API is a scan or a race.
+   */
+  ApiKeyModel,
+  ApiUsageModel,
   AuditLogModel,
   /*
    * Billing events carry the unique index on `eventId` that makes webhook

@@ -1,6 +1,8 @@
 import { env } from '../../src/config/env.js';
 import { connectToDatabase, disconnectFromDatabase } from '../../src/database/connection.js';
 import {
+  ApiKeyModel,
+  ApiUsageModel,
   AuditLogModel,
   BillingEventModel,
   ChannelDeliveryModel,
@@ -58,6 +60,8 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => BillingEventModel.syncIndexes(),
   () => NotificationChannelModel.syncIndexes(),
   () => ChannelDeliveryModel.syncIndexes(),
+  () => ApiKeyModel.syncIndexes(),
+  () => ApiUsageModel.syncIndexes(),
 ];
 
 const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
@@ -79,6 +83,8 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => BillingEventModel.deleteMany({}).exec(),
   () => NotificationChannelModel.deleteMany({}).exec(),
   () => ChannelDeliveryModel.deleteMany({}).exec(),
+  () => ApiKeyModel.deleteMany({}).exec(),
+  () => ApiUsageModel.deleteMany({}).exec(),
 ];
 
 let connected = false;

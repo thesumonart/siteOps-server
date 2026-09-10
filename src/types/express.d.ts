@@ -1,4 +1,4 @@
-import type { RequestAuthContext } from './auth.types.js';
+import type { ApiKeyContext, RequestAuthContext } from './auth.types.js';
 import type { OrganizationContext } from './common.types.js';
 
 /**
@@ -17,6 +17,8 @@ declare global {
       id: string;
       /** Set by `requireAuth`. Absent on public routes. */
       auth?: RequestAuthContext;
+      /** Set by `requireApiKey`, on `/api/v1` only. Never alongside `auth`. */
+      apiKey?: ApiKeyContext;
       /** Set by `requireOrganization`. Absent on routes that declare no permission. */
       organization?: OrganizationContext;
       /** Parsed and normalized input, written by `validate`. */

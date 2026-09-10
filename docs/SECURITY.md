@@ -297,6 +297,30 @@ deployments. Provider identifiers never appear in an API response.
 cannot commit the organization to a recurring charge, and cannot see what it pays. `client` holds
 neither, along with nothing else that writes.
 
+## API keys
+
+A key is a credential that acts for a whole organization, from outside it, for as long as it lives.
+
+- **Stored as a hash.** SHA-256 of 256 random bits, prefixed `so_live_` so a leaked key is
+  recognisable in a secret scanner. Shown once, on issue or rotation; no response carries it again.
+  Authentication is one lookup by hash on a unique index — there is no key-by-key comparison to
+  time — and a token that could never be a key is refused before the database is asked.
+- **Never a session.** `/api/v1` accepts a key and nothing else, and nothing that manages keys
+  accepts one. A cookie that worked on the public API would make it a CSRF target; a key that could
+  mint keys would outlive every revocation.
+- **The tenant is the key's.** The organization comes from the key's own document. A header naming
+  another is ignored, and another tenant's resource is a `404`, as everywhere else.
+- **Capped at the issuer.** A scope may only be granted by someone whose role holds every
+  permission behind it. Scopes are checked per route, on the line that declares it.
+- **One refusal.** Missing, malformed, unknown, revoked and expired keys all answer the same
+  `401 API_KEY_INVALID`.
+- **Budgets.** A per-key limit smooths bursts; the plan's daily quota is counted in the database, so
+  several API instances cannot each grant it in full.
+- **Rotation has no overlap.** The old secret stops working in the write that issues the new one.
+
+A key belongs to the organization, not to the person who made it. When somebody leaves, revoke the
+keys they issued; the list says who issued each one.
+
 ## Notification channels and outgoing webhooks
 
 A webhook is the second place SiteOps sends a request to a URL a customer chose, and it gets the same

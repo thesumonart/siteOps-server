@@ -131,6 +131,13 @@ describe('permission grants', () => {
     expect(hasPermission('client', 'integration:read')).toBe(false);
   });
 
+  it('keeps API keys to admins and owners', () => {
+    // A key acts for the whole organization from outside it, for as long as it lives.
+    expect(hasEveryPermission('admin', ['api_key:read', 'api_key:manage'])).toBe(true);
+    expect(hasPermission('member', 'api_key:read')).toBe(false);
+    expect(hasPermission('client', 'api_key:read')).toBe(false);
+  });
+
   it('grants owners every permission', () => {
     expect(hasEveryPermission('owner', PERMISSIONS)).toBe(true);
   });

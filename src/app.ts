@@ -15,6 +15,7 @@ import { authRateLimit, betterAuthHandler } from './middlewares/better-auth.midd
 import { notFoundHandler } from './middlewares/not-found.middleware.js';
 import { defaultRateLimit } from './middlewares/rate-limit.middleware.js';
 import { requestId } from './middlewares/request-id.middleware.js';
+import { ApiKeyRepository } from './repositories/api-key.repository.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { BillingEventRepository } from './repositories/billing-event.repository.js';
 import { ChannelRepository } from './repositories/channel.repository.js';
@@ -31,6 +32,8 @@ import type { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
 import { STRIPE_WEBHOOK_PATH } from './routes/billing.routes.js';
 import { internalRoutes } from './routes/internal.routes.js';
+import { publicApiRoutes } from './routes/public-api.routes.js';
+import { ApiKeyService } from './services/api-key.service.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { BillingService } from './services/billing.service.js';
@@ -165,6 +168,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const clientRepository = new ClientRepository();
   const billingEventRepository = new BillingEventRepository();
   const channelRepository = new ChannelRepository();
+  const apiKeyRepository = new ApiKeyRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -174,6 +178,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       reports: reportRepository,
       clients: clientRepository,
       channels: channelRepository,
+      apiKeys: apiKeyRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -217,6 +222,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
   );
   const notificationService = new NotificationService(notificationRepository);
   const channelService = new ChannelService(channelRepository, entitlementService, auditService);
+  const apiKeyService = new ApiKeyService(
+    apiKeyRepository,
+    organizationRepository,
+    entitlementService,
+    auditService,
+  );
 
   /*
    * Billing is constructed even when no provider is configured. The service
@@ -244,6 +255,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   const dependencies: ApiDependencies = {
     organizations: organizationRepository,
+    apiKeyService,
     authService,
     auditService,
     billingService,
@@ -260,6 +272,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
     reportGenerationService,
     notificationService,
   };
+
+  /*
+   * The public API, before the dashboard's. It authenticates with an API key
+   * and never with a session, so it must not share a router with routes that
+   * do — and mounting it first means `/api/v1/...` is decided here, whatever
+   * the dashboard router below happens to declare.
+   */
+  app.use('/api/v1', publicApiRoutes(dependencies));
 
   app.use('/api', apiRoutes(dependencies));
 
@@ -328,6 +348,7 @@ interface UsageRepositories {
   readonly reports: ReportRepository;
   readonly clients: ClientRepository;
   readonly channels: ChannelRepository;
+  readonly apiKeys: ApiKeyRepository;
 }
 
 /**
@@ -342,12 +363,12 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
     members: (organizationId) => repositories.memberships.countForOrganization(organizationId),
     clients: (organizationId) => repositories.clients.countForOrganization(organizationId),
     statusPages: () => Promise.resolve(0),
-    apiKeys: () => Promise.resolve(0),
+    apiKeys: (organizationId) => repositories.apiKeys.countActive(organizationId),
     integrations: (organizationId) => repositories.channels.countForOrganization(organizationId),
     reportSchedules: (organizationId) =>
       repositories.reports.countSchedulesForOrganization(organizationId),
     customDomains: () => Promise.resolve(0),
-    apiRequestsToday: () => Promise.resolve(0),
+    apiRequestsToday: (organizationId) => repositories.apiKeys.requestsToday(organizationId),
     aiGenerationsThisMonth: () => Promise.resolve(0),
   };
 }

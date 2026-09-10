@@ -94,8 +94,8 @@ describe.skipIf(!available)('GET /api/billing/plans', () => {
     // Features the plan grants but the product has not shipped are reported
     // separately, so the pricing page can say "coming soon" rather than
     // advertising them as available.
-    expect(agency?.features).not.toContain('api_access');
-    expect(agency?.upcomingFeatures).toContain('api_access');
+    expect(agency?.features).not.toContain('ai_insights');
+    expect(agency?.upcomingFeatures).toContain('ai_insights');
   });
 });
 
