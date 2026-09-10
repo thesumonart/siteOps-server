@@ -297,6 +297,64 @@ deployments. Provider identifiers never appear in an API response.
 cannot commit the organization to a recurring charge, and cannot see what it pays. `client` holds
 neither, along with nothing else that writes.
 
+## Notification channels and outgoing webhooks
+
+A webhook is the second place SiteOps sends a request to a URL a customer chose, and it gets the same
+treatment as the first.
+
+### SSRF
+
+Both layers apply, unchanged. `validateChannelUrl` screens a webhook URL with `normalizeWebsiteUrl`
+at creation and on every edit, and requires `https`. `postToChannel` re-validates the string
+immediately before every send and connects through the guarded dispatcher, whose lookup refuses a
+private address — a fresh pool per request, so no reused socket skips it. A stored URL that points
+inward, however it got there, fails with a reason and is not retried.
+
+**Redirects are not followed.** Following one would mean deliver a signed payload to a hop the
+customer never saw. A `3xx` is a failed delivery that says so.
+
+Slack and Discord URLs are held to an allowlist of their own hosts and paths. A "Slack" channel is
+a promise that the message goes to Slack.
+
+`POST /api/channels/:channelId/test` makes the server send a request on demand, so it has its own
+rate limit on top of the SSRF boundary: the boundary decides where a request may go, the budget how
+often.
+
+### Credentials at rest
+
+A Slack or Discord webhook URL is a bearer credential, and a webhook signing secret has to be usable
+again to sign, so neither can be hashed the way invitation tokens are. Both are sealed with
+AES-256-GCM (`src/utils/secret-box.ts`) under a key derived from `AUTH_SECRET` with HKDF, with a
+fresh IV per value and the organization id bound in as associated data. A leaked database yields
+ciphertext; a ciphertext copied onto another tenant's channel does not open there; a tampered one
+fails to open rather than decrypting to something else.
+
+Neither ever leaves the server after it arrives. Responses carry `target` — origin plus the last
+four characters — and the signing secret is returned exactly once, on creation or rotation. Both
+are on the logger's redaction list.
+
+### Signing
+
+`X-SiteOps-Signature: t=<unix>,v1=<hex HMAC-SHA256 over "${t}.${body}">` — the same scheme this API
+verifies Stripe's webhooks with, for the same reasons: the signature covers the exact bytes, and the
+timestamp inside it lets a receiver refuse a replay. Requests are signed at send time, so a retry
+carries a fresh timestamp rather than one a receiver would reject as stale. Secrets are 256 bits,
+prefixed `so_whsec_` so a leaked one is recognisable in a scanner.
+
+### Content
+
+Everything a customer typed that reaches a chat message is escaped for the platform: `&`, `<` and
+`>` for Slack, whose `<!channel>` would page a whole workspace, and markdown for Discord, whose
+messages are sent with `allowed_mentions: { parse: [] }` so no website name can mention anyone. An
+error body from a receiver is truncated and stripped of control characters before it reaches the
+delivery log.
+
+### Authorization
+
+`integration:read` and `integration:manage` belong to admins and owners. A channel decides where
+the whole organization's alerts go; a member manages their own email preferences and nothing else.
+Another organization's channel is a `404`, like every other tenant boundary.
+
 ## Reporting
 
 This is a private repository. Raise a security concern directly with the maintainer rather than in

@@ -1,4 +1,5 @@
 import type { EmailService } from '../email/email.service.js';
+import type { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
 import { checkWebsiteWithRetries } from '../monitoring/check-with-retries.js';
 import type { CheckOptions } from '../monitoring/http-checker.js';
 import { notifyWebsiteDown, notifyWebsiteRecovered } from '../monitoring/notification-processor.js';
@@ -19,6 +20,8 @@ export interface MonitoringJobOptions {
 export interface MonitoringJobDependencies {
   readonly emailService: EmailService;
   readonly notifications: NotificationRepository;
+  /** Queues Slack, Discord and webhook messages. Never sends inside the lease. */
+  readonly channels: ChannelEventPublisher;
 }
 
 /**
@@ -52,31 +55,42 @@ export async function runMonitoringJob(
 
     // A failed alert must never roll back the incident that triggered it — the
     // incident and check state are already durably written by the time either
-    // of these runs, so a notification failure is only ever logged.
-    if (result.incident.newlyOpenedIncidentId) {
-      await notifyWebsiteDown(
-        website,
-        result.incident.newlyOpenedIncidentId,
-        dependencies.emailService,
-        dependencies.notifications,
-      ).catch((error: unknown) => {
-        logger.error(
-          { err: error, websiteId: website.id.toHexString() },
-          'notification.down_dispatch_failed',
-        );
-      });
-    } else if (result.incident.newlyResolvedIncidentId) {
-      await notifyWebsiteRecovered(
-        website,
-        result.incident.newlyResolvedIncidentId,
-        dependencies.emailService,
-        dependencies.notifications,
-      ).catch((error: unknown) => {
-        logger.error(
-          { err: error, websiteId: website.id.toHexString() },
-          'notification.recovery_dispatch_failed',
-        );
-      });
+    // of these runs, so a notification failure is only ever logged. Email and
+    // channels are independent of each other for the same reason: a mail
+    // provider outage must not stop the Slack message, nor the reverse.
+    const logFailure =
+      (event: string) =>
+      (error: unknown): void => {
+        logger.error({ err: error, websiteId: website.id.toHexString() }, event);
+      };
+
+    const openedId = result.incident.newlyOpenedIncidentId;
+    const resolvedId = result.incident.newlyResolvedIncidentId;
+
+    if (openedId) {
+      await Promise.all([
+        notifyWebsiteDown(
+          website,
+          openedId,
+          dependencies.emailService,
+          dependencies.notifications,
+        ).catch(logFailure('notification.down_dispatch_failed')),
+        dependencies.channels
+          .websiteDown(website, openedId)
+          .catch(logFailure('channel.down_publish_failed')),
+      ]);
+    } else if (resolvedId) {
+      await Promise.all([
+        notifyWebsiteRecovered(
+          website,
+          resolvedId,
+          dependencies.emailService,
+          dependencies.notifications,
+        ).catch(logFailure('notification.recovery_dispatch_failed')),
+        dependencies.channels
+          .websiteRecovered(website, resolvedId)
+          .catch(logFailure('channel.recovery_publish_failed')),
+      ]);
     }
   } catch (error) {
     logger.error(

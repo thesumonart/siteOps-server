@@ -13,11 +13,18 @@ import { createLinksRunner } from '../monitoring/runners/links.runner.js';
 import { createPerformanceRunner } from '../monitoring/runners/performance.runner.js';
 import { createSeoRunner } from '../monitoring/runners/seo.runner.js';
 import { createSslRunner } from '../monitoring/runners/ssl.runner.js';
+import { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
+import { ChannelRepository } from '../repositories/channel.repository.js';
 import { NotificationRepository } from '../repositories/notification.repository.js';
 import { ReportRepository } from '../repositories/report.repository.js';
 import { BrandingService } from '../services/branding.service.js';
 import { createLogger } from '../utils/logger.js';
-import { createEmailMonitorNotifier } from './monitor-notifier.js';
+import { ChannelDeliveryLoop } from './channel-delivery-loop.js';
+import {
+  combineMonitorNotifiers,
+  createChannelMonitorNotifier,
+  createEmailMonitorNotifier,
+} from './monitor-notifier.js';
 import { MonitorSchedulerLoop } from './monitor-scheduler-loop.js';
 import { ReportSchedulerLoop } from './report-scheduler-loop.js';
 import { SchedulerLoop } from './scheduler-loop.js';
@@ -63,6 +70,14 @@ const LEASE_DURATION_MS =
  */
 const REPORT_LEASE_DURATION_MS = 10 * 60 * 1000;
 
+/**
+ * How long a channel delivery claim is held: one attempt's timeout, plus the
+ * same margin the uptime lease leaves for the writes that follow. Shorter, and
+ * a slow receiver's delivery would be claimed and sent a second time while the
+ * first attempt was still waiting on it.
+ */
+const CHANNEL_LEASE_DURATION_MS = env.CHANNEL_DELIVERY_TIMEOUT_MS + 30_000;
+
 /** Identifies our requests in a monitored site's own access log. */
 export const MONITOR_USER_AGENT = 'SiteOpsMonitor/1.0 (+https://siteops.app)';
 
@@ -84,6 +99,7 @@ export interface MonitoringRuntimeSnapshot {
   readonly lastUptimeTickAt: string | null;
   readonly lastMonitorTickAt: string | null;
   readonly lastReportTickAt: string | null;
+  readonly lastChannelTickAt: string | null;
 }
 
 /**
@@ -122,6 +138,7 @@ export class MonitoringRuntime {
   private readonly uptimeLoop: SchedulerLoop;
   private readonly monitorLoop: MonitorSchedulerLoop;
   private readonly reportLoop: ReportSchedulerLoop;
+  private readonly channelLoop: ChannelDeliveryLoop;
 
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private started = false;
@@ -133,6 +150,34 @@ export class MonitoringRuntime {
   constructor(private readonly host: MonitoringRuntimeHost) {
     const emailService = new EmailService();
     const notifications = new NotificationRepository();
+    const channelRepository = new ChannelRepository();
+
+    /*
+     * Slack, Discord and webhook messages get a loop of their own. The jobs
+     * below only queue them, because a receiver that takes ten seconds to
+     * answer must not hold a lease sized for one uptime check; this loop sends,
+     * retries with backoff, and records what happened. Queuing wakes it, so a
+     * message leaves as soon as the check that caused it is done.
+     */
+    this.channelLoop = new ChannelDeliveryLoop(
+      {
+        pollIntervalMs: env.CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS * 1000,
+        queue: {
+          batchSize: env.CHANNEL_DELIVERY_CONCURRENCY,
+          leaseDurationMs: CHANNEL_LEASE_DURATION_MS,
+        },
+        job: {
+          timeoutMs: env.CHANNEL_DELIVERY_TIMEOUT_MS,
+          maxAttempts: env.CHANNEL_DELIVERY_MAX_ATTEMPTS,
+          retryBaseSeconds: env.CHANNEL_DELIVERY_RETRY_BASE_SECONDS,
+          allowLoopback: env.MONITOR_ALLOW_PRIVATE_ADDRESSES,
+        },
+      },
+      { channels: channelRepository },
+    );
+    const channels = new ChannelEventPublisher(channelRepository, () => {
+      this.channelLoop.wake();
+    });
 
     this.uptimeLoop = new SchedulerLoop(
       {
@@ -148,7 +193,7 @@ export class MonitoringRuntime {
           userAgent: MONITOR_USER_AGENT,
         },
       },
-      { emailService, notifications },
+      { emailService, notifications, channels },
     );
 
     /*
@@ -167,7 +212,10 @@ export class MonitoringRuntime {
       },
       {
         runners: buildRunners(),
-        notifier: createEmailMonitorNotifier(emailService, notifications),
+        notifier: combineMonitorNotifiers(
+          createEmailMonitorNotifier(emailService, notifications),
+          createChannelMonitorNotifier(channels),
+        ),
       },
     );
 
@@ -204,6 +252,7 @@ export class MonitoringRuntime {
     this.uptimeLoop.start();
     this.monitorLoop.start();
     this.reportLoop.start();
+    this.channelLoop.start();
 
     this.heartbeatTimer = setInterval(() => {
       void this.writeHeartbeat();
@@ -248,6 +297,7 @@ export class MonitoringRuntime {
       this.uptimeLoop.stop(),
       this.monitorLoop.stop(),
       this.reportLoop.stop(),
+      this.channelLoop.stop(),
     ]);
 
     const failure = results.find((result) => result.status === 'rejected');
@@ -270,6 +320,11 @@ export class MonitoringRuntime {
    * independent queues and the caller is waiting on the slowest of them.
    * Failures are collected rather than propagated: a report queue that cannot
    * be drained must not stop the uptime sweep from being reported as done.
+   *
+   * Channel deliveries run afterwards rather than alongside. Those loops are
+   * what queue them, and on a host that suspends between ticks, a message
+   * queued by this sweep would otherwise wait for the next one — a minute
+   * late for an outage alert.
    */
   async runOnce(): Promise<{
     readonly ran: readonly string[];
@@ -283,13 +338,10 @@ export class MonitoringRuntime {
       ['reports', () => this.reportLoop.tickNow()],
     ];
 
-    const outcomes = await Promise.allSettled(loops.map(([, tick]) => tick()));
-
     const ran: string[] = [];
     const failed: { loop: string; reason: string }[] = [];
 
-    outcomes.forEach((outcome, index) => {
-      const name = loops[index]?.[0] ?? 'unknown';
+    const record = (name: string, outcome: PromiseSettledResult<void>): void => {
       if (outcome.status === 'fulfilled') {
         ran.push(name);
         return;
@@ -297,7 +349,15 @@ export class MonitoringRuntime {
       const reason = outcome.reason instanceof Error ? outcome.reason.message : 'The tick failed.';
       failed.push({ loop: name, reason });
       log.error({ err: outcome.reason, loop: name }, 'monitoring_runtime.tick_failed');
+    };
+
+    const outcomes = await Promise.allSettled(loops.map(([, tick]) => tick()));
+    outcomes.forEach((outcome, index) => {
+      record(loops[index]?.[0] ?? 'unknown', outcome);
     });
+
+    const [channelOutcome] = await Promise.allSettled([this.channelLoop.tickNow()]);
+    if (channelOutcome) record('channels', channelOutcome);
 
     await this.writeHeartbeat(failed.length);
 
@@ -312,6 +372,7 @@ export class MonitoringRuntime {
       lastUptimeTickAt: toIso(this.uptimeLoop.lastTickAt()),
       lastMonitorTickAt: toIso(this.monitorLoop.lastTickAt()),
       lastReportTickAt: toIso(this.reportLoop.lastTickAt()),
+      lastChannelTickAt: toIso(this.channelLoop.lastTickAt()),
     };
   }
 

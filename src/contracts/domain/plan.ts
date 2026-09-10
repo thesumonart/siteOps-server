@@ -86,9 +86,6 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
  * the reverse but still a failure.
  */
 export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = [
-  'slack_notifications',
-  'discord_notifications',
-  'webhooks',
   'status_pages',
   'api_access',
   'custom_domains',

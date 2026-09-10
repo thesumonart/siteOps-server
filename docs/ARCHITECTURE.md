@@ -45,6 +45,8 @@ their reasoning so a later change can tell "deliberate" apart from "how it happe
          incident rules          website status
               │
         notification dispatch ──▶  Resend
+              │
+        channel_deliveries  ──▶  delivery loop  ──▶  Slack · Discord · webhooks
 ```
 
 The API and the worker are **separate processes** deliberately. Monitoring is long-running I/O
@@ -149,6 +151,26 @@ The cost, stated honestly: claiming is one round trip per website rather than a 
 the poll interval bounds how promptly a due check starts. Neither matters at this product's scale.
 If it ever does, `monitoring.queue.ts` is the only module that has to change — `claimBatch` and
 `releaseAndReschedule` are the whole interface.
+
+### Channel messages are a queue, not a call
+
+Email is sent inside the monitoring job, with its retries bounded to one dispatch. Slack, Discord
+and webhook messages are not: the job writes one `channel_deliveries` document per channel and a
+fourth loop sends them. Two reasons, both about somebody else's server:
+
+- **A receiver's latency must not become a check's.** The uptime lease is sized for one check plus
+  its writes. A webhook that takes its full timeout to answer, times the number of channels, would
+  otherwise hold that lease.
+- **A retry schedule measured in minutes needs to survive a restart.** Backoff over forty minutes
+  cannot live in a stack frame.
+
+It is the same lease-queue mechanism as the other three rather than a broker, for the reasons in
+the next section. What makes retrying safe here — and unsafe for email — is that every webhook
+carries a delivery id stable across attempts, so a receiver can drop a repeat.
+
+`src/integrations/` holds what is specific to the destinations: rendering Block Kit and Discord
+embeds, signing, and the guarded POST. It sits beside `src/billing/`, the other adapter to somebody
+else's API.
 
 ### Reports are queries, not documents
 

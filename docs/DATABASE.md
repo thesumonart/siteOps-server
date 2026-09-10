@@ -23,6 +23,8 @@ end-to-end suite cleans up by addressing them directly. They are not renamed cas
 | `incidents`             | `incident.model.ts`              | app        | Confirmed outages.                              |
 | `notifications`         | `notification.model.ts`          | app        | One delivery record per recipient per event.    |
 | `notification_settings` | `notification-settings.model.ts` | app        | Per-user, per-organization alert rules.         |
+| `notification_channels` | `notification-channel.model.ts`  | app        | Slack, Discord and webhook destinations.        |
+| `channel_deliveries`    | `channel-delivery.model.ts`      | app        | One event owed to one channel. Also a queue.    |
 | `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                               |
 | `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.           |
 
@@ -189,6 +191,38 @@ transition produce the same key and the second one loses.
 | --------------------------------------- | ----------------------------------- | ----------------------------------------------- |
 | `notification_settings_org_user_unique` | `{ organizationId, userId }` unique | One preference row per person per organization. |
 
+### `notification_channels`
+
+An organization's Slack, Discord and webhook destinations. `urlCiphertext` and `secretCiphertext`
+are sealed with AES-256-GCM (`src/utils/secret-box.ts`), keyed from `AUTH_SECRET` and bound to the
+organization, because a Slack webhook URL is a credential and a signing secret has to be usable
+again — hashing either would make it useless. `targetPreview` is written beside the URL so nothing
+that displays a channel ever opens it.
+
+| Index                     | Keys                                               | Why                                                                                              |
+| ------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `channel_org_name_unique` | `{ organizationId, name }` unique                  | The settings list and the audit log identify a channel by name; two called "Slack" is ambiguous. |
+| `channel_org_created_at`  | `{ organizationId, createdAt: -1 }`                | The settings list.                                                                               |
+| `channel_dispatch`        | `{ organizationId, events }`, partial on `enabled` | The dispatcher's only query. Multikey on `events`; disabled channels are kept out of it.         |
+
+Rotating `AUTH_SECRET` makes every sealed value unreadable. Deliveries to such a channel fail with a
+reason that asks for the URL again — the same order of consequence rotation has for every session.
+
+### `channel_deliveries`
+
+One event owed to one channel: the delivery log **and** the retry queue, the way `websites` is both
+the website list and the uptime queue.
+
+| Index                             | Keys                                                    | Why                                                                                                                                       |
+| --------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `delivery_dedupe_unique`          | `{ dedupeKey }` unique                                  | **One message per channel per transition.** `<incidentId>:<event>:<channelId>`; a replayed job's insert fails rather than queueing twice. |
+| `delivery_due`                    | `{ nextAttemptAt }`, partial on `status: 'pending'`     | The delivery loop's claim query. Settled deliveries — nearly all — stay out of the index.                                                 |
+| `delivery_org_channel_created_at` | `{ organizationId, channelId, createdAt: -1, _id: -1 }` | One channel's delivery log, keyset-paged.                                                                                                 |
+| `delivery_ttl`                    | `{ createdAt: 1 }`, 30 days                             | Retention; far longer than any retry schedule, so it never removes a delivery still due.                                                  |
+
+`payload` is a snapshot of the facts at the moment of the transition, not a reference to them: a
+retry an hour later describes the outage as it was when it started.
+
 ### `audit_logs`
 
 | Index                  | Keys                                | Why                |
@@ -293,6 +327,7 @@ Monitoring data grows fast: one website on a one-minute interval writes 525,600 
 | `monitor_results`                   | `CHECK_RETENTION_DAYS`, default 90 | `result_ttl` TTL index |
 | `reports`                           | 365 days                           | `report_ttl` TTL index |
 | `audit_logs`                        | 365 days                           | `audit_ttl` TTL index  |
+| `channel_deliveries`                | 30 days                            | `delivery_ttl` TTL     |
 | `session`, `verification`           | their own `expiresAt`              | TTL index at 0         |
 | `incidents`, `websites`, membership | kept                               | —                      |
 

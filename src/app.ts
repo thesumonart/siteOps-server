@@ -17,6 +17,7 @@ import { defaultRateLimit } from './middlewares/rate-limit.middleware.js';
 import { requestId } from './middlewares/request-id.middleware.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { BillingEventRepository } from './repositories/billing-event.repository.js';
+import { ChannelRepository } from './repositories/channel.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
 import { ClientRepository } from './repositories/client.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
@@ -33,6 +34,7 @@ import { internalRoutes } from './routes/internal.routes.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { BillingService } from './services/billing.service.js';
+import { ChannelService } from './services/channel.service.js';
 import { ClientService } from './services/client.service.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
@@ -162,6 +164,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const reportRepository = new ReportRepository();
   const clientRepository = new ClientRepository();
   const billingEventRepository = new BillingEventRepository();
+  const channelRepository = new ChannelRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -170,6 +173,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       memberships: membershipRepository,
       reports: reportRepository,
       clients: clientRepository,
+      channels: channelRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -212,6 +216,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     websiteRepository,
   );
   const notificationService = new NotificationService(notificationRepository);
+  const channelService = new ChannelService(channelRepository, entitlementService, auditService);
 
   /*
    * Billing is constructed even when no provider is configured. The service
@@ -242,6 +247,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     authService,
     auditService,
     billingService,
+    channelService,
     clientService,
     entitlementService,
     organizationService,
@@ -321,6 +327,7 @@ interface UsageRepositories {
   readonly memberships: MembershipRepository;
   readonly reports: ReportRepository;
   readonly clients: ClientRepository;
+  readonly channels: ChannelRepository;
 }
 
 /**
@@ -336,7 +343,7 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
     clients: (organizationId) => repositories.clients.countForOrganization(organizationId),
     statusPages: () => Promise.resolve(0),
     apiKeys: () => Promise.resolve(0),
-    integrations: () => Promise.resolve(0),
+    integrations: (organizationId) => repositories.channels.countForOrganization(organizationId),
     reportSchedules: (organizationId) =>
       repositories.reports.countSchedulesForOrganization(organizationId),
     customDomains: () => Promise.resolve(0),

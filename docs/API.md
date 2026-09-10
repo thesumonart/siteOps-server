@@ -86,11 +86,11 @@ tenants.
 Each route below lists the permission it requires. Permissions come from
 `contracts/domain/permissions.ts`; roles map to them there, and no route tests a role name.
 
-| Role   | Highlights                                                                 |
-| ------ | -------------------------------------------------------------------------- |
-| owner  | Everything, plus organization settings, member roles and removal, billing  |
-| admin  | Websites, monitoring toggle, incident updates, invitations, audit log      |
-| member | Read-only across the organization, plus their own notification preferences |
+| Role   | Highlights                                                                                   |
+| ------ | -------------------------------------------------------------------------------------------- |
+| owner  | Everything, plus organization settings, member roles and removal, billing                    |
+| admin  | Websites, monitoring toggle, incident updates, invitations, audit log, notification channels |
+| member | Read-only across the organization, plus their own notification preferences                   |
 
 ## Rate limits
 
@@ -107,6 +107,9 @@ Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-R
 | website create                      | 60 per hour                        |
 | member invite                       | 20 per hour                        |
 | invitation accept                   | 20 per hour                        |
+| channel create                      | 30 per hour                        |
+| channel test                        | 10 per minute                      |
+| channel secret rotation             | 20 per hour                        |
 
 Sign-in and sign-up share one scope on purpose: alternating between them must not double an
 attacker's budget.
@@ -884,6 +887,209 @@ rewrites the field it did not mention.
 
 ---
 
+## Notification channels
+
+Slack, Discord and outgoing webhooks. Email alerting is per person; a channel belongs to the
+organization and carries its own subscription list, so a member turning off outage emails does not
+silence the team's Slack.
+
+Every route needs `integration:read` or `integration:manage` — admins and owners. Creating,
+enabling, re-pointing or testing a channel also needs the plan feature for its type (`webhooks`,
+`slack_notifications`, `discord_notifications`, Professional and above) and counts against
+`maxIntegrations`. Reading, renaming, disabling and deleting never do: an organization that
+downgrades must still be able to see what it had and clean it up. After a downgrade its channels
+stay, and simply stop receiving.
+
+**A destination URL goes in and never comes out.** A Slack or Discord webhook URL is a credential
+for posting into somebody's workspace, so it is stored sealed and every response carries `target`
+instead — the origin and the last four characters, `https://hooks.slack.com/…a1B2`.
+
+Channel events are incident transitions, and use the same names as the rest of the product:
+
+| Event               | When                                          |
+| ------------------- | --------------------------------------------- |
+| `website.down`      | An availability incident opens                |
+| `website.recovered` | It resolves                                   |
+| `monitor.problem`   | An SSL, domain, performance, … incident opens |
+| `monitor.recovered` | It resolves                                   |
+| `channel.test`      | Only from `POST /test`; not subscribable      |
+
+One message per channel per transition, never a repeat while a site stays down — guaranteed by a
+unique index, as for email.
+
+### `GET /api/channels`
+
+Permission: `integration:read`. `{ "items": NotificationChannelDto[] }`, newest first. Unpaginated:
+the count is bounded by the plan's integration limit.
+
+```json
+{
+  "id": "…",
+  "name": "Slack on-call",
+  "type": "slack",
+  "enabled": true,
+  "events": ["website.down", "website.recovered"],
+  "target": "https://hooks.slack.com/…uvwx",
+  "metadata": {},
+  "hasSigningSecret": false,
+  "lastDeliveryAt": "2026-09-10T08:00:03.000Z",
+  "lastDeliveryStatus": "delivered",
+  "lastFailureReason": null,
+  "consecutiveFailures": 0,
+  "createdAt": "…",
+  "updatedAt": "…"
+}
+```
+
+`consecutiveFailures` counts messages that never arrived. A failing channel keeps receiving — it is
+never switched off automatically, because silence is an explicit choice in this product.
+
+### `POST /api/channels`
+
+Permission: `integration:manage`. `201` with `{ channel, signingSecret }`.
+
+| Field      | Notes                                                                                  |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `type`     | `webhook`, `slack` or `discord`. Fixed once created.                                   |
+| `name`     | Unique within the organization. `CHANNEL_NAME_TAKEN` otherwise.                        |
+| `url`      | See below.                                                                             |
+| `events`   | Optional; defaults to every event. At least one.                                       |
+| `enabled`  | Optional; defaults to `true`.                                                          |
+| `metadata` | Webhooks only. Up to 10 string pairs echoed in every payload — an environment, a team. |
+
+The URL is validated against the type:
+
+- **Slack** — `https://hooks.slack.com/services/…` and nothing else.
+- **Discord** — `https://discord.com/api/webhooks/{id}/{token}` (or `discordapp.com`).
+- **Webhook** — any public `https` URL. It passes the same string-level SSRF screen as a monitored
+  website, and the connect-time address guard runs again on every delivery.
+
+`signingSecret` is returned **exactly once**, here, for a webhook channel (`so_whsec_…`), and is
+`null` for Slack and Discord, which authenticate the sender by URL alone. It is stored sealed and
+never returned by a read; losing it means rotating it.
+
+### `GET /api/channels/:channelId` · `PATCH /api/channels/:channelId`
+
+Permissions: `integration:read` / `integration:manage`. A patch takes any of `name`, `url`,
+`events`, `enabled`, `metadata`. A new `url` is judged by the rule for the type the channel already
+is. `metadata` on a Slack or Discord channel is a field error.
+
+### `DELETE /api/channels/:channelId`
+
+Permission: `integration:manage`. `204`. Anything still queued for the channel is dropped with it.
+
+### `POST /api/channels/:channelId/test`
+
+Permission: `integration:manage`. Sends a `channel.test` message **now** and answers with the
+outcome — `{ delivered, statusCode, durationMs, failureReason }` — rather than queueing it. It takes
+exactly the path a real alert takes: the same formatter, signature and SSRF boundary, so a passing
+test means a real alert will arrive. Works on a disabled channel, which is when a test is useful.
+
+### `POST /api/channels/:channelId/rotate-secret`
+
+Permission: `integration:manage`. Webhook channels only. `{ "signingSecret": "so_whsec_…" }`,
+shown once and effective immediately — there is no window where both secrets are valid, which is
+the safe direction to fail in when the reason for rotating is a leak.
+
+### `GET /api/channels/:channelId/deliveries`
+
+Permission: `integration:read`. Cursor-paginated `ChannelDeliveryDto`, newest first, optionally
+filtered by `status` (`pending`, `delivered`, `failed`). Kept 30 days.
+
+```json
+{
+  "id": "…",
+  "event": "website.down",
+  "status": "pending",
+  "attemptCount": 1,
+  "responseStatus": 503,
+  "failureReason": "HTTP 503: deploying",
+  "createdAt": "…",
+  "lastAttemptAt": "…",
+  "nextAttemptAt": "…",
+  "deliveredAt": null
+}
+```
+
+### Delivery and retries
+
+Deliveries are queued by the worker when a transition happens and sent by a loop of their own, so
+a slow receiver never holds up a check. A 2xx is delivered. A timeout, a refused connection, `408`,
+`429` or `5xx` is retried with exponential backoff — 30 s, 2 m, 8 m, 32 m by default, or longer if
+the receiver sends `Retry-After` — up to `CHANNEL_DELIVERY_MAX_ATTEMPTS`. Any other `4xx` is
+final. A `3xx` is final too: redirects are not followed, so a signed payload never goes somewhere
+the customer did not choose.
+
+Delivery is **at least once**. A receiver that accepted a request but did not answer in time will
+see it again, with the same `X-SiteOps-Delivery`.
+
+### Receiving a webhook
+
+```http
+POST /your/endpoint HTTP/1.1
+Content-Type: application/json
+User-Agent: SiteOpsWebhooks/1.0 (+https://siteops.app)
+X-SiteOps-Event: website.down
+X-SiteOps-Delivery: 66e0…
+X-SiteOps-Signature: t=1757491200,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+```
+
+```json
+{
+  "id": "website.down:66e0…",
+  "type": "website.down",
+  "createdAt": "2026-09-10T08:00:00.000Z",
+  "organizationId": "…",
+  "data": {
+    "website": { "id": "…", "name": "Acme Store", "url": "https://acme.com/" },
+    "incident": {
+      "id": "…",
+      "status": "open",
+      "type": "http_error",
+      "category": "availability",
+      "severity": "critical",
+      "detail": null,
+      "startedAt": "2026-09-10T08:00:00.000Z",
+      "resolvedAt": null,
+      "durationSeconds": null,
+      "failedCheckCount": 3,
+      "lastStatusCode": 503,
+      "lastErrorType": "http_error",
+      "lastErrorMessage": "Responded with HTTP 503."
+    },
+    "monitor": null,
+    "dashboardUrl": "https://app.siteops.app/dashboard/websites/…"
+  },
+  "metadata": { "environment": "production" }
+}
+```
+
+`id` is the same on every retry and on every channel, so a receiver subscribed twice can tell it
+heard about one transition twice. `data.monitor` is set for `monitor.*` events.
+
+**Verify before parsing.** The signature is HMAC-SHA256 over `${t}.${raw body}` with the channel's
+signing secret. Compute it over the bytes received — a parsed and re-serialised body will never
+match — compare in constant time, and refuse a timestamp more than five minutes old:
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+export function verifySiteOpsSignature(rawBody, header, secret, toleranceSeconds = 300) {
+  const parts = Object.fromEntries(header.split(',').map((part) => part.split('=')));
+  const timestamp = Number(parts.t);
+  if (!Number.isInteger(timestamp)) return false;
+  if (Math.abs(Date.now() / 1000 - timestamp) > toleranceSeconds) return false;
+
+  const expected = createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest();
+  const received = Buffer.from(parts.v1 ?? '', 'hex');
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+```
+
+`tests/integration/channel-dispatch.test.ts` verifies real deliveries with exactly this procedure.
+
+---
+
 ## Error codes
 
 | Code                            | Typical status | Meaning                                              |
@@ -919,6 +1125,8 @@ rewrites the field it did not mention.
 | `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                       |
 | `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                           |
 | `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                 |
+| `CHANNEL_NOT_FOUND`             | 404            | No such channel, or not yours                        |
+| `CHANNEL_NAME_TAKEN`            | 409            | A channel with that name already exists              |
 | `REPORT_NOT_FOUND`              | 404            | No such report, or not yours                         |
 | `REPORT_NOT_READY`              | 409            | Report is still generating, or failed                |
 | `REPORT_SCHEDULE_NOT_FOUND`     | 404            | No such schedule, or not yours                       |

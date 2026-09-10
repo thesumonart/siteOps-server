@@ -25,6 +25,8 @@ export const PERMISSIONS = [
   'incident:update',
   'notification:read',
   'notification:update',
+  'integration:read',
+  'integration:manage',
   'audit_log:read',
   'client:read',
   'client:manage',
@@ -59,6 +61,11 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   'incident:update',
   'member:invite',
   'audit_log:read',
+  // Notification channels are organization-wide: one admin connecting Slack
+  // changes where everyone's alerts go, and a webhook URL is a credential.
+  // Members keep their own email preferences and nothing here.
+  'integration:read',
+  'integration:manage',
   'client:read',
   'client:manage',
   'report:create',

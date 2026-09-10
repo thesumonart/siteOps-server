@@ -2,10 +2,12 @@ import { syncAuthIndexes } from './auth-indexes.js';
 import {
   AuditLogModel,
   BillingEventModel,
+  ChannelDeliveryModel,
   ClientModel,
   IncidentModel,
   InvitationModel,
   MonitorResultModel,
+  NotificationChannelModel,
   NotificationModel,
   NotificationSettingsModel,
   OrganizationMemberModel,
@@ -57,6 +59,13 @@ export const MANAGED_MODELS = [
   ReportScheduleModel,
   NotificationModel,
   NotificationSettingsModel,
+  /*
+   * Channel deliveries carry the unique `dedupeKey` that makes a Slack or
+   * webhook message once-per-transition, and the partial index the retry loop
+   * claims from. Missing either is a duplicate alert or a full scan per tick.
+   */
+  NotificationChannelModel,
+  ChannelDeliveryModel,
   AuditLogModel,
   /*
    * Billing events carry the unique index on `eventId` that makes webhook

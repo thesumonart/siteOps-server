@@ -11,7 +11,9 @@ import {
   WebsiteCheckModel,
   WebsiteModel,
 } from '../../src/models/index.js';
+import { ChannelEventPublisher } from '../../src/monitoring/channel-dispatch.js';
 import { claimBatch } from '../../src/queues/monitoring.queue.js';
+import { ChannelRepository } from '../../src/repositories/channel.repository.js';
 import { NotificationRepository } from '../../src/repositories/notification.repository.js';
 import { handlers, startMockServer, type MockServer } from '../support/mock-server.js';
 import {
@@ -48,6 +50,7 @@ const JOB_OPTIONS = {
 const QUEUE_OPTIONS = { batchSize: 10, leaseDurationMs: 60_000 } as const;
 
 const notifications = new NotificationRepository();
+const channels = new ChannelEventPublisher(new ChannelRepository());
 
 let organizationId: Types.ObjectId;
 let userId: Types.ObjectId;
@@ -124,6 +127,7 @@ async function tick(): Promise<void> {
       runMonitoringJob(website, JOB_OPTIONS, {
         emailService: new EmailService(),
         notifications,
+        channels,
       }),
     ),
   );

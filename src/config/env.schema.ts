@@ -147,6 +147,28 @@ export const envSchema = z
      */
     CHECK_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(90),
 
+    /* --- Notification channels ------------------------------------------
+     *
+     * Slack, Discord and webhook messages are queued by the monitoring job and
+     * sent by a loop of their own, so a slow receiver can never hold a lease
+     * the uptime check needs. These bound that loop.
+     */
+    /** How often the worker looks for channel messages that are due. Also the worst-case alert delay. */
+    CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(1).max(60).default(5),
+    /** Channel messages sent simultaneously. Each is one outbound request to a third party. */
+    CHANNEL_DELIVERY_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(10),
+    /** How long one attempt may take before it counts as failed and is retried. */
+    CHANNEL_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
+    /** Attempts per message, including the first, before it is recorded as failed. */
+    CHANNEL_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+    /**
+     * Delay before the first retry. Each later retry waits four times the one
+     * before, so the default spreads five attempts over about forty minutes —
+     * long enough to ride out a receiver's deploy, short enough that the alert
+     * still means something when it lands.
+     */
+    CHANNEL_DELIVERY_RETRY_BASE_SECONDS: z.coerce.number().int().min(1).max(3_600).default(30),
+
     /** How often the worker looks for queued reports and due schedules. */
     REPORT_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
     /** Reports built per tick. Each is a burst of aggregation, not a network call. */

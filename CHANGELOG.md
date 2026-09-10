@@ -13,6 +13,27 @@ deployed together.
 
 ### Added
 
+- **Slack, Discord and webhook notification channels.** An organization-level destination with its
+  own event list, alongside per-person email. `GET/POST /api/channels`,
+  `GET/PATCH/DELETE /api/channels/:id`, `POST .../test`, `POST .../rotate-secret` and
+  `GET .../deliveries`, behind the new `integration:read` / `integration:manage` permissions (admins
+  and owners) and the `webhooks`, `slack_notifications` and `discord_notifications` plan features,
+  which are no longer listed as upcoming.
+  - Incident transitions — `website.down`, `website.recovered`, `monitor.problem`,
+    `monitor.recovered` — are queued as `channel_deliveries` and sent by a fourth loop in the
+    monitoring runtime, so a slow receiver never holds a check's lease. Retries back off
+    exponentially (30 s, 2 m, 8 m, 32 m by default), honour `Retry-After`, and stop at once on a
+    response that will never succeed. One message per channel per transition, by unique index.
+  - Webhooks are signed `X-SiteOps-Signature: t=…,v1=…` (HMAC-SHA256 over timestamp and raw body)
+    and carry `X-SiteOps-Event` and a retry-stable `X-SiteOps-Delivery`. Slack gets Block Kit and
+    Discord an embed, with customer text escaped so a website name cannot ping anyone.
+  - Every send goes through the SSRF boundary the monitors use, and redirects are not followed.
+  - Channel URLs and signing secrets are sealed at rest with AES-256-GCM, bound to the organization,
+    and never returned; a signing secret is shown once.
+  - `CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS`, `CHANNEL_DELIVERY_CONCURRENCY`,
+    `CHANNEL_DELIVERY_TIMEOUT_MS`, `CHANNEL_DELIVERY_MAX_ATTEMPTS` and
+    `CHANNEL_DELIVERY_RETRY_BASE_SECONDS`, all with defaults. Two new collections need
+    `pnpm indexes:sync`.
 - **Billing and subscriptions.** Stripe, behind a provider interface (`src/billing/`), with hosted
   checkout for the first purchase and the hosted customer portal for every change after it —
   upgrade, downgrade, cancel, resume, payment method, invoices. SiteOps never mutates a

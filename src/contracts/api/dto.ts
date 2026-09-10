@@ -1,5 +1,11 @@
 import { type AuditAction, type AuditArea } from '../domain/audit.js';
 import { type BillingInterval, type SubscriptionStatus } from '../domain/billing.js';
+import {
+  type ChannelDeliveryStatus,
+  type ChannelEvent,
+  type ChannelType,
+  type WebhookEventType,
+} from '../domain/channel.js';
 import { type CheckErrorType, type CheckStatus, type StatsRange } from '../domain/check.js';
 import { type ClientStatus } from '../domain/client.js';
 import {
@@ -357,6 +363,74 @@ export interface NotificationDto {
 
 export interface NotificationSettingsDto {
   readonly preferences: NotificationPreferences;
+}
+
+/**
+ * A Slack, Discord or webhook destination for the organization's alerts.
+ *
+ * The destination URL itself never leaves the server. A Slack or Discord
+ * webhook URL is a bearer credential — anyone holding it can post into that
+ * channel — so the dashboard gets `target`, enough to recognise which one it
+ * is, and nothing it could paste somewhere else.
+ */
+export interface NotificationChannelDto {
+  readonly id: string;
+  readonly name: string;
+  readonly type: ChannelType;
+  readonly enabled: boolean;
+  readonly events: readonly ChannelEvent[];
+  /** The URL with its secret part elided: `https://hooks.slack.com/…a1B2`. */
+  readonly target: string;
+  /** Static key/value pairs echoed in every webhook payload. Empty for Slack and Discord. */
+  readonly metadata: Readonly<Record<string, string>>;
+  /** True for a webhook channel, whose requests are signed. The secret is shown once, on creation. */
+  readonly hasSigningSecret: boolean;
+  readonly lastDeliveryAt: string | null;
+  readonly lastDeliveryStatus: 'delivered' | 'failed' | null;
+  readonly lastFailureReason: string | null;
+  /** Deliveries that failed in a row. A failing channel keeps receiving; silence is an explicit choice. */
+  readonly consecutiveFailures: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * The answer to creating a channel.
+ *
+ * `signingSecret` is present exactly once, here, for a webhook channel. It is
+ * stored encrypted and never returned by a read; losing it means rotating it.
+ */
+export interface CreatedNotificationChannelDto {
+  readonly channel: NotificationChannelDto;
+  readonly signingSecret: string | null;
+}
+
+export interface ChannelSigningSecretDto {
+  readonly signingSecret: string;
+}
+
+/** One queued message to one channel, and what became of it. */
+export interface ChannelDeliveryDto {
+  readonly id: string;
+  readonly event: WebhookEventType;
+  readonly status: ChannelDeliveryStatus;
+  readonly attemptCount: number;
+  /** The receiver's HTTP status on the last attempt, when it answered at all. */
+  readonly responseStatus: number | null;
+  readonly failureReason: string | null;
+  readonly createdAt: string;
+  readonly lastAttemptAt: string | null;
+  /** When the next retry is due. Null once the delivery has succeeded or given up. */
+  readonly nextAttemptAt: string | null;
+  readonly deliveredAt: string | null;
+}
+
+/** The outcome of sending a test message, answered synchronously. */
+export interface ChannelTestResultDto {
+  readonly delivered: boolean;
+  readonly statusCode: number | null;
+  readonly durationMs: number;
+  readonly failureReason: string | null;
 }
 
 export interface AuditLogDto {

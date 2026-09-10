@@ -25,6 +25,7 @@ runMonitoringJob()      one per claimed website, concurrently
       │        └─ update the website        (status, counters, last-* fields)
       │
       ├─ notifyWebsiteDown / notifyWebsiteRecovered   only on a transition
+      ├─ queue a delivery per Slack / Discord / webhook channel  (sent by its own loop)
       │
       └─ finally: releaseAndReschedule()   always, on every path
 ```
@@ -216,6 +217,44 @@ Status is `pending` → `sent` or `failed`, with a truncated `failureReason`.
 A failed alert **never** rolls back the incident that triggered it. The incident and check state
 are durably written before dispatch, so a notification failure is only ever logged.
 
+### Slack, Discord and webhooks
+
+A channel belongs to the organization rather than to a person, and has its own list of events.
+Email and channels are independent of each other: an organization with no verified member still
+has its Slack told about an outage, and a mail provider outage does not stop the Slack message.
+
+**Queued, not sent.** The monitoring job holds a lease sized for one check, and a receiver that
+takes ten seconds to answer must not be able to hold it. So on a transition the job writes one
+`channel_deliveries` document per subscribed channel and returns. A fourth loop in the monitoring
+runtime claims due deliveries under the same atomic lease as every other queue, sends them, and
+records the outcome. Queuing wakes that loop, so a message normally leaves as soon as the check that
+caused it is done; `CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS` is only the worst case. On a host driven
+by the external tick, `runOnce` drains channels **after** the other loops, so a message queued by
+this sweep is not left for the next one.
+
+**Idempotency is the same as email's**, and the same kind of guarantee: the delivery's `dedupeKey`
+is `<incidentId>:<event>:<channelId>` under a unique index, so a replayed job queues nothing twice.
+
+**Retries are safe here in a way they are not for email.** Email retries happen inside one dispatch
+because an email cannot be recalled or deduplicated by its recipient. A webhook carries
+`X-SiteOps-Delivery`, stable across attempts, so a receiver can drop a repeat — which is what makes
+a queue that retries ambiguous failures the right design rather than a duplicate-alert generator.
+The attempt is counted at claim time, so even a delivery that crashes the process runs out.
+
+| Outcome                                | What happens                                                      |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| 2xx                                    | Delivered                                                         |
+| timeout, refused, reset, 408, 429, 5xx | Retried: 30 s, 2 m, 8 m, 32 m… or longer if `Retry-After` says so |
+| any other 4xx                          | Failed at once — Slack's `no_service` is not going to change      |
+| 3xx                                    | Failed at once; redirects are never followed                      |
+| blocked address                        | Failed at once; see docs/SECURITY.md                              |
+
+A delivery that settles as failed increments the channel's `consecutiveFailures`, which the settings
+screen shows next to its name. A failing channel is never switched off automatically.
+
+**The plan is read per event.** A downgrade keeps an organization's channels, and stops queueing for
+the types its plan no longer includes.
+
 ## Statistics
 
 Every number comes from checks the worker actually performed.
@@ -234,15 +273,20 @@ Every number comes from checks the worker actually performed.
 
 ## Configuration
 
-| Variable                          | Default | What it controls                                          |
-| --------------------------------- | ------- | --------------------------------------------------------- |
-| `MONITOR_POLL_INTERVAL_SECONDS`   | 15      | How often the scheduler looks for due websites            |
-| `MONITOR_CONCURRENCY`             | 10      | Websites checked simultaneously, and the claim batch size |
-| `MONITOR_MAX_REDIRECTS`           | 5       | Hops followed before giving up                            |
-| `MONITOR_MAX_ATTEMPTS`            | 2       | Attempts per scheduled check, including the first         |
-| `NOTIFICATION_MAX_ATTEMPTS`       | 3       | Delivery attempts per alert email                         |
-| `CHECK_RETENTION_DAYS`            | 90      | Raw check retention; baked into the TTL index             |
-| `MONITOR_ALLOW_PRIVATE_ADDRESSES` | false   | Test-only. Refused in production.                         |
+| Variable                                 | Default | What it controls                                          |
+| ---------------------------------------- | ------- | --------------------------------------------------------- |
+| `MONITOR_POLL_INTERVAL_SECONDS`          | 15      | How often the scheduler looks for due websites            |
+| `MONITOR_CONCURRENCY`                    | 10      | Websites checked simultaneously, and the claim batch size |
+| `MONITOR_MAX_REDIRECTS`                  | 5       | Hops followed before giving up                            |
+| `MONITOR_MAX_ATTEMPTS`                   | 2       | Attempts per scheduled check, including the first         |
+| `NOTIFICATION_MAX_ATTEMPTS`              | 3       | Delivery attempts per alert email                         |
+| `CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS` | 5       | Worst-case delay before a channel message leaves          |
+| `CHANNEL_DELIVERY_CONCURRENCY`           | 10      | Channel messages sent at once                             |
+| `CHANNEL_DELIVERY_TIMEOUT_MS`            | 10000   | One attempt's timeout                                     |
+| `CHANNEL_DELIVERY_MAX_ATTEMPTS`          | 5       | Attempts per channel message, including the first         |
+| `CHANNEL_DELIVERY_RETRY_BASE_SECONDS`    | 30      | First retry delay; each later one is four times longer    |
+| `CHECK_RETENTION_DAYS`                   | 90      | Raw check retention; baked into the TTL index             |
+| `MONITOR_ALLOW_PRIVATE_ADDRESSES`        | false   | Test-only. Refused in production.                         |
 
 No magic numbers: every monitoring parameter is an environment variable validated at startup.
 

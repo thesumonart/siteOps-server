@@ -122,6 +122,15 @@ describe('permission grants', () => {
     expect(hasPermission('admin', 'billing:manage')).toBe(false);
   });
 
+  it('keeps notification channels to admins and owners', () => {
+    // A channel decides where the whole organization's alerts go, and its URL
+    // is a credential; a member manages their own email preferences only.
+    expect(hasEveryPermission('admin', ['integration:read', 'integration:manage'])).toBe(true);
+    expect(hasPermission('member', 'integration:read')).toBe(false);
+    expect(hasPermission('member', 'integration:manage')).toBe(false);
+    expect(hasPermission('client', 'integration:read')).toBe(false);
+  });
+
   it('grants owners every permission', () => {
     expect(hasEveryPermission('owner', PERMISSIONS)).toBe(true);
   });

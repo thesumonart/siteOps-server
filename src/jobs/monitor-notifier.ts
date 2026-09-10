@@ -5,6 +5,7 @@ import { PREFERENCE_FOR_MONITOR } from '../contracts/index.js';
 import type { EmailService } from '../email/email.service.js';
 import { monitorAlertTemplate, monitorRecoveredTemplate } from '../email/templates/index.js';
 import { IncidentModel } from '../models/index.js';
+import type { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
 import type { MonitorRunResult } from '../monitoring/monitor-runner.js';
 import { dispatchToRecipients, resolveRecipients } from '../monitoring/notification-dispatch.js';
 import type { ClaimedMonitor } from '../queues/monitor.queue.js';
@@ -138,5 +139,49 @@ export function createEmailMonitorNotifier(
         notifications,
       );
     },
+  };
+}
+
+/**
+ * Monitor transitions for the organization's Slack, Discord and webhook
+ * channels. The publisher only queues; see `monitoring/channel-dispatch.ts`.
+ */
+export function createChannelMonitorNotifier(publisher: ChannelEventPublisher): MonitorNotifier {
+  return {
+    async monitorProblem(monitor, result, incidentId): Promise<void> {
+      // The same guard as email: only these two statuses open an incident.
+      if (result.status !== 'failing' && result.status !== 'warning') return;
+      await publisher.monitorProblem(monitor, result, incidentId);
+    },
+
+    async monitorRecovered(monitor, result, incidentId): Promise<void> {
+      await publisher.monitorRecovered(monitor, result, incidentId);
+    },
+  };
+}
+
+/**
+ * One transition, told to every notifier.
+ *
+ * Each runs whatever happens to the others — an email provider outage must not
+ * stop the Slack message, nor the reverse — and the first failure is rethrown
+ * once all have settled, so the job still logs that something went wrong.
+ */
+export function combineMonitorNotifiers(...notifiers: readonly MonitorNotifier[]): MonitorNotifier {
+  async function everyone(send: (notifier: MonitorNotifier) => Promise<void>): Promise<void> {
+    const results = await Promise.allSettled(notifiers.map(send));
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    if (failure) {
+      throw failure.reason instanceof Error ? failure.reason : new Error('A notifier failed.');
+    }
+  }
+
+  return {
+    monitorProblem: (monitor, result, incidentId) =>
+      everyone((notifier) => notifier.monitorProblem(monitor, result, incidentId)),
+    monitorRecovered: (monitor, result, incidentId) =>
+      everyone((notifier) => notifier.monitorRecovered(monitor, result, incidentId)),
   };
 }

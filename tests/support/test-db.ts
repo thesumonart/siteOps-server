@@ -3,10 +3,12 @@ import { connectToDatabase, disconnectFromDatabase } from '../../src/database/co
 import {
   AuditLogModel,
   BillingEventModel,
+  ChannelDeliveryModel,
   ClientModel,
   IncidentModel,
   InvitationModel,
   MonitorResultModel,
+  NotificationChannelModel,
   NotificationModel,
   NotificationSettingsModel,
   OrganizationMemberModel,
@@ -54,6 +56,8 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => ReportScheduleModel.syncIndexes(),
   () => AuditLogModel.syncIndexes(),
   () => BillingEventModel.syncIndexes(),
+  () => NotificationChannelModel.syncIndexes(),
+  () => ChannelDeliveryModel.syncIndexes(),
 ];
 
 const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
@@ -73,6 +77,8 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => ReportScheduleModel.deleteMany({}).exec(),
   () => AuditLogModel.deleteMany({}).exec(),
   () => BillingEventModel.deleteMany({}).exec(),
+  () => NotificationChannelModel.deleteMany({}).exec(),
+  () => ChannelDeliveryModel.deleteMany({}).exec(),
 ];
 
 let connected = false;

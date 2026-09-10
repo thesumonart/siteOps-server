@@ -258,7 +258,13 @@ export async function fetchPage(url: string, options: FetchPageOptions): Promise
   }
 }
 
-function errorCodeOf(error: unknown): string | undefined {
+/**
+ * The first string `code` on an error or its cause chain.
+ *
+ * undici wraps socket and TLS failures rather than rethrowing them, so the code
+ * that says what actually happened is usually a level or two down.
+ */
+export function errorCodeOf(error: unknown): string | undefined {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current != null; depth += 1) {
     if (typeof current === 'object') {
@@ -278,7 +284,7 @@ function errorCodeOf(error: unknown): string | undefined {
  * SEO and change detection — the head and the opening of the body are where the
  * signals are — and the caller is told it was cut off.
  */
-async function readBounded(
+export async function readBounded(
   body: NodeJS.ReadableStream,
   maxBytes: number,
 ): Promise<{ text: string; byteLength: number; truncated: boolean }> {

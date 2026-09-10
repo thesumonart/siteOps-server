@@ -24,6 +24,12 @@ const REDACTED_PATHS = [
   'tokenHash',
   '*.token',
   'secret',
+  // A webhook signing secret, and the sealed forms of it and of a channel URL.
+  // The ciphertext is not the credential, but nothing needs it in a log line.
+  'signingSecret',
+  '*.signingSecret',
+  'urlCiphertext',
+  'secretCiphertext',
   'apiKey',
   'MONGODB_URI',
   'AUTH_SECRET',
