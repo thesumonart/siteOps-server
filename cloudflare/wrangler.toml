@@ -26,9 +26,9 @@ compatibility_date = "2026-09-09"
 crons = ["* * * * *"]
 
 [vars]
-# The Render service origin to drive. Replace with the real hostname; no
-# trailing slash.
-SITEOPS_API_URL = "https://<YOUR_RENDER_URL>"
+# The Render service origin to drive. Origin only — worker.ts appends
+# /api/internal/monitoring/tick, so a path here would be doubled.
+SITEOPS_API_URL = "https://siteops-server.onrender.com"
 
 # CRON_SECRET is a secret, never a [vars] entry — putting it here would commit
 # it to the repository. Set it with `wrangler secret put CRON_SECRET`.
