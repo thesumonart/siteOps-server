@@ -1,11 +1,20 @@
 /**
- * SiteOps monitoring clock.
+ * SiteOps monitoring clock and keep-alive.
  *
- * A cron-triggered Cloudflare Worker whose entire job is to make one
- * authenticated request a minute to the API's operator tick endpoint. It does
- * two things at once: it wakes an instance that a free plan has suspended, and
- * it runs a monitoring sweep immediately rather than letting the instance
- * return a 200 and fall asleep again before its own next timer fires.
+ * A cron-triggered Cloudflare Worker with two jobs, in this order:
+ *
+ *  1. An unauthenticated `GET /health` against the API on every single tick.
+ *     This is what resets Render's 15-minute inactivity timer, and it runs
+ *     unconditionally — a suspended service runs no timers, so losing the
+ *     probe means losing monitoring entirely.
+ *  2. An authenticated `POST /api/internal/monitoring/tick`, when the operator
+ *     secret is configured, which runs a monitoring sweep immediately rather
+ *     than letting the instance return a 200 and fall asleep again before its
+ *     own next timer fires.
+ *
+ * The two are deliberately independent. An earlier version returned early when
+ * the secret was missing and therefore made no request at all, which left the
+ * service to sleep and stopped monitoring on a deployment that looked healthy.
  *
  * This Worker performs no monitoring itself, and cannot. Inspecting a
  * certificate needs a raw TLS handshake with the peer certificate read back off
@@ -40,15 +49,27 @@ export interface Env {
    * The operator bearer token. Its value must equal the API's
    * `INTERNAL_API_KEY` — that is the variable the API compares against.
    * Set with `wrangler secret put CRON_SECRET`.
+   *
+   * Optional by type as well as in practice: when it is absent the keep-alive
+   * probe still runs, so the service stays awake even while the sweep cannot
+   * be authorized.
    */
-  readonly CRON_SECRET: string;
+  readonly CRON_SECRET?: string;
 }
+
+/**
+ * Liveness probe. Chosen over `/` and over `/health/ready` on purpose: it is
+ * registered in src/app.ts ahead of the rate limiter, so a request a minute
+ * consumes none of the deployment's budget, and it performs no dependency I/O,
+ * so a database blip cannot make the keep-alive itself look like a failure.
+ */
+const PROBE_PATH = '/health';
 
 /** Path of the operator endpoint that runs one sweep. */
 const TICK_PATH = '/api/internal/monitoring/tick';
 
 /**
- * Upper bound on a single tick request.
+ * Upper bound on a single request.
  *
  * A cold start on a suspended free instance can take the better part of a
  * minute, so this is generous — but it must still be bounded, or a hung fetch
@@ -67,15 +88,58 @@ interface TickResponse {
   };
 }
 
-async function runTick(env: Env): Promise<void> {
-  if (!env.CRON_SECRET) {
-    // Refuse rather than send an unauthenticated request the API will reject.
-    // A missing secret is a deployment mistake, and it should say so plainly.
-    console.error('tick.misconfigured', { reason: 'CRON_SECRET is not set' });
-    return;
-  }
+/** Joins the configured origin to a path, tolerating a trailing slash. */
+function apiUrl(env: Env, path: string): string {
+  return `${env.SITEOPS_API_URL.replace(/\/+$/, '')}${path}`;
+}
 
-  const url = `${env.SITEOPS_API_URL.replace(/\/+$/, '')}${TICK_PATH}`;
+function describeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+/**
+ * Wakes the service, or keeps it awake.
+ *
+ * Any completed HTTP request resets the inactivity timer, so even a non-2xx
+ * answer counts as success for keep-alive purposes — it still proves the
+ * instance was reached. Only a rejected fetch means nothing arrived.
+ */
+async function keepAwake(env: Env): Promise<void> {
+  const url = apiUrl(env, PROBE_PATH);
+  const startedAt = Date.now();
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'user-agent': 'siteops-cron-worker' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+
+    const durationMs = Date.now() - startedAt;
+
+    if (!response.ok) {
+      // The instance answered, so it is awake and the keep-alive did its job;
+      // the status is still worth surfacing, because a healthy API returns 200.
+      console.error('keepalive.unhealthy', { url, status: response.status, durationMs });
+      return;
+    }
+
+    console.log('keepalive.ok', { durationMs });
+  } catch (error) {
+    // Nothing arrived: DNS, TLS, a network failure, or the timeout above. The
+    // inactivity timer was not reset, so this is the line that explains a
+    // service which went to sleep despite the cron firing.
+    console.error('keepalive.failed', {
+      url,
+      durationMs: Date.now() - startedAt,
+      error: describeError(error),
+    });
+  }
+}
+
+/** Runs one monitoring sweep on the API. */
+async function runTick(env: Env, secret: string): Promise<void> {
+  const url = apiUrl(env, TICK_PATH);
   const startedAt = Date.now();
 
   let response: Response;
@@ -90,7 +154,7 @@ async function runTick(env: Env): Promise<void> {
          * `timingSafeEqual`. An `x-cron-secret` header would be ignored and the
          * request answered 401.
          */
-        authorization: `Bearer ${env.CRON_SECRET}`,
+        authorization: `Bearer ${secret}`,
         'content-type': 'application/json',
         'user-agent': 'siteops-cron-worker',
       },
@@ -103,7 +167,7 @@ async function runTick(env: Env): Promise<void> {
     console.error('tick.request_failed', {
       url,
       durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeError(error),
     });
     return;
   }
@@ -146,15 +210,38 @@ async function runTick(env: Env): Promise<void> {
   });
 }
 
+/**
+ * One cron tick: keep the service awake, then sweep if we are able to.
+ *
+ * The probe runs first and is awaited, so a suspended instance has finished
+ * waking before the sweep is attempted and the sweep then runs against a warm
+ * process instead of paying the cold start a second time. Neither step can
+ * prevent the other being attempted — each handles its own failures.
+ */
+async function handleTick(env: Env): Promise<void> {
+  await keepAwake(env);
+
+  const secret = env.CRON_SECRET;
+  if (!secret) {
+    console.error('tick.skipped', {
+      reason: 'CRON_SECRET is not set; the service was kept awake but no sweep ran.',
+      hint: 'Run: wrangler secret put CRON_SECRET',
+    });
+    return;
+  }
+
+  await runTick(env, secret);
+}
+
 export default {
   /**
    * Cron handler.
    *
-   * The work is handed to `waitUntil` so the invocation stays alive until the
-   * request settles; returning before it resolves would cancel the fetch and
-   * the sweep would never run.
+   * The work is handed to `waitUntil` so the invocation stays alive until both
+   * requests settle; returning before they resolve would cancel them, and
+   * neither the keep-alive nor the sweep would happen.
    */
   scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): void {
-    ctx.waitUntil(runTick(env));
+    ctx.waitUntil(handleTick(env));
   },
 };
