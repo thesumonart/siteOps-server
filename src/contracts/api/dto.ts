@@ -37,6 +37,12 @@ import {
 } from '../domain/report.js';
 import { type OrganizationRole } from '../domain/roles.js';
 import { type Permission } from '../domain/permissions.js';
+import {
+  type CustomDomainStatus,
+  type PublicComponentStatus,
+  type PublicIncidentKind,
+  type StatusPageTheme,
+} from '../domain/status-page.js';
 import { type WebsiteStatus } from '../domain/website.js';
 
 /**
@@ -459,6 +465,93 @@ export interface ApiKeyDto {
 export interface IssuedApiKeyDto {
   readonly apiKey: ApiKeyDto;
   readonly token: string;
+}
+
+/** One monitored website on a status page, under the name visitors see. */
+export interface StatusPageComponentDto {
+  readonly websiteId: string;
+  readonly displayName: string;
+}
+
+/**
+ * A custom domain claimed for a status page, and how to prove it.
+ *
+ * Nothing routes to the page on this domain until `status` is `verified`. The
+ * TXT record is what proves the organization controls the name; pointing a
+ * CNAME at `cnameTarget` is what makes requests for it arrive.
+ */
+export interface CustomDomainDto {
+  readonly domain: string;
+  readonly status: CustomDomainStatus;
+  readonly verificationRecord: {
+    readonly type: 'TXT';
+    readonly name: string;
+    readonly value: string;
+  };
+  readonly cnameTarget: string;
+  readonly verifiedAt: string | null;
+}
+
+/** A status page as the organization that owns it manages it. */
+export interface StatusPageDto {
+  readonly id: string;
+  readonly slug: string;
+  readonly title: string;
+  readonly description: string | null;
+  readonly published: boolean;
+  readonly theme: { readonly mode: StatusPageTheme; readonly accentColor: string | null };
+  readonly components: readonly StatusPageComponentDto[];
+  readonly customDomain: CustomDomainDto | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** One UTC day of a component's history. Null when nothing was measured that day. */
+export interface PublicUptimeDayDto {
+  readonly date: string;
+  readonly uptimePercentage: number | null;
+}
+
+export interface PublicStatusComponentDto {
+  readonly name: string;
+  readonly status: PublicComponentStatus;
+  /** Over the whole history window. Null when nothing was measured in it. */
+  readonly uptimePercentage: number | null;
+  /** Oldest first, one entry per day, including days with no data. */
+  readonly history: readonly PublicUptimeDayDto[];
+}
+
+export interface PublicIncidentDto {
+  readonly componentName: string;
+  readonly kind: PublicIncidentKind;
+  readonly startedAt: string;
+}
+
+/**
+ * A published status page, as anyone on the internet sees it.
+ *
+ * Deliberately without identifiers, URLs, response times, status codes or
+ * error text. What a visitor needs is whether each component works and how
+ * reliably it has; everything else is the agency's, and some of it is a map of
+ * exactly what broke.
+ */
+export interface PublicStatusPageDto {
+  readonly slug: string;
+  readonly title: string;
+  readonly description: string | null;
+  readonly theme: { readonly mode: StatusPageTheme; readonly accentColor: string | null };
+  /** The worst component's status. */
+  readonly status: PublicComponentStatus;
+  readonly components: readonly PublicStatusComponentDto[];
+  readonly activeIncidents: readonly PublicIncidentDto[];
+  /**
+   * Days of history actually shown: the request, capped at how long this
+   * organization's checks are kept. Older data does not exist to show.
+   */
+  readonly historyDays: number;
+  /** False only on a white-labelled plan that has turned the attribution off. */
+  readonly showPoweredBy: boolean;
+  readonly generatedAt: string;
 }
 
 /** The outcome of sending a test message, answered synchronously. */

@@ -55,6 +55,13 @@ export default defineConfig({
        */
       RATE_LIMIT_MAX_REQUESTS: '100000',
       AUTH_RATE_LIMIT_MAX_REQUESTS: '100000',
+      /*
+       * Public status pages and custom-domain lookups are not cached in tests:
+       * a case that publishes a page and reads it straight back must see the
+       * change, whichever process-wide cache an earlier case warmed. The cache
+       * itself is covered by `public-status-cache.test.ts`.
+       */
+      STATUS_PAGE_CACHE_TTL_SECONDS: '0',
     },
   },
 });

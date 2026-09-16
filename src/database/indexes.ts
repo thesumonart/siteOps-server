@@ -16,6 +16,7 @@ import {
   OrganizationModel,
   ReportModel,
   ReportScheduleModel,
+  StatusPageModel,
   WebsiteCheckModel,
   WebsiteModel,
   WebsiteMonitorModel,
@@ -75,6 +76,12 @@ export const MANAGED_MODELS = [
    */
   ApiKeyModel,
   ApiUsageModel,
+  /*
+   * The slug index makes a public URL unique, and the verified-domain index is
+   * both how the router finds a page by hostname and the only thing stopping
+   * two organizations from serving one domain.
+   */
+  StatusPageModel,
   AuditLogModel,
   /*
    * Billing events carry the unique index on `eventId` that makes webhook

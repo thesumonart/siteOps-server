@@ -19,6 +19,12 @@ declare global {
       auth?: RequestAuthContext;
       /** Set by `requireApiKey`, on `/api/v1` only. Never alongside `auth`. */
       apiKey?: ApiKeyContext;
+      /**
+       * Set by `customDomainRouting` when the request arrived on a verified
+       * custom domain: the status page that domain serves. Never set from
+       * anything a client sends except the host it connected to.
+       */
+      customDomainStatusPageId?: string;
       /** Set by `requireOrganization`. Absent on routes that declare no permission. */
       organization?: OrganizationContext;
       /** Parsed and normalized input, written by `validate`. */

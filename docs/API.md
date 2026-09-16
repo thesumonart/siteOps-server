@@ -97,19 +97,21 @@ Each route below lists the permission it requires. Permissions come from
 Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`. A refusal is
 `429` with `RATE_LIMITED` and a `Retry-After` header.
 
-| Scope                               | Default budget                     |
-| ----------------------------------- | ---------------------------------- |
-| general                             | `RATE_LIMIT_MAX_REQUESTS` / minute |
-| sign-in and sign-up                 | 10 per 15 minutes, shared          |
-| password reset, verification resend | 5 per hour                         |
-| session read                        | 60 per minute                      |
-| organization create                 | 10 per hour                        |
-| website create                      | 60 per hour                        |
-| member invite                       | 20 per hour                        |
-| invitation accept                   | 20 per hour                        |
-| channel create                      | 30 per hour                        |
-| channel test                        | 10 per minute                      |
-| channel secret rotation             | 20 per hour                        |
+| Scope                               | Default budget                                 |
+| ----------------------------------- | ---------------------------------------------- |
+| general                             | `RATE_LIMIT_MAX_REQUESTS` / minute             |
+| sign-in and sign-up                 | 10 per 15 minutes, shared                      |
+| password reset, verification resend | 5 per hour                                     |
+| session read                        | 60 per minute                                  |
+| organization create                 | 10 per hour                                    |
+| website create                      | 60 per hour                                    |
+| member invite                       | 20 per hour                                    |
+| invitation accept                   | 20 per hour                                    |
+| channel create                      | 30 per hour                                    |
+| channel test                        | 10 per minute                                  |
+| channel secret rotation             | 20 per hour                                    |
+| custom domain verification          | 30 per hour                                    |
+| public status pages                 | `PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE` / minute |
 
 Sign-in and sign-up share one scope on purpose: alternating between them must not double an
 attacker's budget.
@@ -1100,6 +1102,153 @@ export function verifySiteOpsSignature(rawBody, header, secret, toleranceSeconds
 
 ---
 
+## Status pages
+
+A status page shows a chosen set of the organization's websites to the public: whether each works,
+its daily uptime, and any outage or slowdown in progress. Available on plans with `status_pages`
+(Starter and above), up to `maxStatusPages`. Permissions `status_page:read` (members and above) and
+`status_page:manage` (admins and owners).
+
+### Managing pages
+
+#### `GET /api/status-pages`
+
+`{ "items": StatusPageDto[] }`, newest first.
+
+```json
+{
+  "id": "…",
+  "slug": "acme",
+  "title": "Acme status",
+  "description": null,
+  "published": true,
+  "theme": { "mode": "auto", "accentColor": "#2563EB" },
+  "components": [{ "websiteId": "…", "displayName": "Storefront" }],
+  "customDomain": {
+    "domain": "status.acme.com",
+    "status": "pending",
+    "verificationRecord": {
+      "type": "TXT",
+      "name": "_siteops-challenge.status.acme.com",
+      "value": "siteops-verification=…"
+    },
+    "cnameTarget": "api.siteops.example",
+    "verifiedAt": null
+  },
+  "createdAt": "…",
+  "updatedAt": "…"
+}
+```
+
+#### `POST /api/status-pages`
+
+Body: `{ title, slug, description?, components?, theme?, published? }`. `201` with the page.
+
+- `slug` is the public address — 3 to 48 lowercase letters, digits and single hyphens — and is
+  unique across every organization (`409 STATUS_PAGE_SLUG_TAKEN`).
+- `components` is up to 50 `{ websiteId, displayName }`, each website once. Every website must be
+  this organization's; any other id is `404 WEBSITE_NOT_FOUND`, whether it exists elsewhere or not.
+  The display name is what visitors read — the website's own name is never shown.
+- `published` defaults to `false`. Nothing about a page is public until it is `true`.
+
+#### `GET /api/status-pages/:statusPageId` · `PATCH /api/status-pages/:statusPageId`
+
+`PATCH` takes any subset of the create body; `components`, when given, replaces the list. Changes
+need the `status_pages` feature, except `{ "published": false }` alone, which always works — it is
+how a downgraded organization takes a page down.
+
+#### `DELETE /api/status-pages/:statusPageId`
+
+`204`. Allowed on any plan. Deleting a website also removes it from every page that showed it.
+
+### Custom domains
+
+Serve a page on a domain the customer owns, such as `status.acme.com`. Needs the `custom_domains`
+feature (Agency and Pro); each page holding a domain, verified or not, counts against
+`maxCustomDomains`.
+
+1. `PUT` the domain. The response's `customDomain` names a TXT record and a CNAME target.
+2. The customer adds a TXT record at `verificationRecord.name` with `verificationRecord.value`, and
+   a CNAME from the domain to `cnameTarget`.
+3. `POST …/verify`. Once the record resolves, the domain is `verified` and starts routing.
+
+#### `PUT /api/status-pages/:statusPageId/custom-domain`
+
+Body: `{ domain }` — a hostname without scheme, port or path. Returns the page. Claiming the domain
+the page already holds changes nothing, so a published TXT record stays valid. Several organizations
+may be pending on one name; a domain another organization has already verified is
+`409 CUSTOM_DOMAIN_TAKEN`, and so is losing the race to verify it.
+
+#### `POST /api/status-pages/:statusPageId/custom-domain/verify`
+
+Looks the TXT record up and returns the page. `400 CUSTOM_DOMAIN_NOT_VERIFIED` when the record is not
+there yet, or when DNS did not answer — the message says which. Limited to 30 attempts an hour.
+
+#### `DELETE /api/status-pages/:statusPageId/custom-domain`
+
+Returns the page with `customDomain: null`. Idempotent. The domain stops routing at once.
+
+### Reading a page publicly
+
+No session and no key. Any origin may read these — `Access-Control-Allow-Origin: *`, never with
+credentials — and responses carry `Cache-Control: public, max-age=STATUS_PAGE_CACHE_TTL_SECONDS`.
+Budget: `PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE` per address.
+
+#### `GET /api/public/status-pages/:slug?days=30|60|90`
+
+`PublicStatusPageDto`. A page that does not exist, is unpublished, or belongs to a plan without
+status pages is the same `404 STATUS_PAGE_NOT_FOUND`.
+
+```json
+{
+  "slug": "acme",
+  "title": "Acme status",
+  "description": null,
+  "theme": { "mode": "auto", "accentColor": "#2563EB" },
+  "status": "degraded",
+  "components": [
+    {
+      "name": "Storefront",
+      "status": "degraded",
+      "uptimePercentage": 99.95,
+      "history": [
+        { "date": "2026-06-19", "uptimePercentage": 100 },
+        { "date": "2026-06-20", "uptimePercentage": null }
+      ]
+    }
+  ],
+  "activeIncidents": [{ "componentName": "Storefront", "kind": "degraded", "startedAt": "…" }],
+  "historyDays": 90,
+  "showPoweredBy": true,
+  "generatedAt": "…"
+}
+```
+
+- `status` is `operational`, `degraded`, `down` or `unknown`. A paused or not-yet-checked website is
+  `unknown`; the page's headline is its worst component, with `unknown` ranking lowest.
+- `history` has one entry per UTC day, oldest first, ending today. `null` means nothing was measured
+  that day — not an outage. Uptime is floored, like everywhere else.
+- `historyDays` is the request capped at the plan's check retention: a Starter page asked for 90
+  days shows 60, because older checks no longer exist.
+- `activeIncidents` lists open outages (`outage`) and response-time anomalies (`degraded`) only.
+  Certificate, domain, content and SEO incidents are never published.
+- Deliberately absent: website ids and URLs, response times, status codes, error messages, and
+  anything naming the organization. See `docs/SECURITY.md`.
+
+The response is rebuilt at most once per `STATUS_PAGE_CACHE_TTL_SECONDS` per API instance; changes
+made through the dashboard show at once on the instance that made them.
+
+#### `GET /api/public/status-page?days=30|60|90`
+
+The same response, for the page the request's **host** serves: a verified custom domain whose CNAME
+points at this API, or a proxy that preserves `Host`. On any other host, `404`. The page must be
+published, and the organization's plan must still include custom domains — the slug keeps working
+without them.
+
+On a verified custom domain, **every path outside `/api/public/` is `404`**, sign-in included.
+
+---
+
 ## Public API
 
 `/api/v1` is for integrations — a script, Terraform, a status board — and authenticates with an
@@ -1222,48 +1371,52 @@ names the key — `API key “Terraform”` — as well as the person who issued
 
 ## Error codes
 
-| Code                            | Typical status | Meaning                                              |
-| ------------------------------- | -------------- | ---------------------------------------------------- |
-| `VALIDATION_ERROR`              | 400            | Input failed a schema; see `fields`                  |
-| `UNAUTHENTICATED`               | 401            | No usable session                                    |
-| `FORBIDDEN`                     | 403            | Allowed to be here, not to do this                   |
-| `NOT_FOUND`                     | 404            | No such route or resource                            |
-| `CONFLICT`                      | 409            | Collided with something that exists                  |
-| `RATE_LIMITED`                  | 429            | Budget exhausted; see `Retry-After`                  |
-| `INTERNAL_ERROR`                | 500            | Unexpected fault; details are logged, never returned |
-| `SERVICE_UNAVAILABLE`           | 503            | A dependency is down                                 |
-| `EMAIL_ALREADY_REGISTERED`      | 409            | Address is taken                                     |
-| `INVALID_CREDENTIALS`           | 401            | Sign-in failed; deliberately not more specific       |
-| `EMAIL_NOT_VERIFIED`            | 403            | Address not confirmed yet                            |
-| `INVALID_TOKEN`                 | 404            | Link is not valid                                    |
-| `TOKEN_EXPIRED`                 | 400            | Link has expired                                     |
-| `ORGANIZATION_NOT_FOUND`        | 404            | No such organization, or not yours                   |
-| `ORGANIZATION_SLUG_TAKEN`       | 409            | Slug is in use                                       |
-| `NOT_A_MEMBER`                  | 403            | Not a member of this organization                    |
-| `INSUFFICIENT_ROLE`             | 403            | Role does not carry the permission                   |
-| `CANNOT_REMOVE_LAST_OWNER`      | 409            | An organization must keep an owner                   |
-| `MEMBER_NOT_FOUND`              | 404            | No such member here                                  |
-| `CLIENT_NOT_FOUND`              | 404            | No such client, or not yours                         |
-| `CLIENT_NAME_TAKEN`             | 409            | A client with that name already exists               |
-| `ALREADY_A_MEMBER`              | 409            | Already joined                                       |
-| `WEBSITE_NOT_FOUND`             | 404            | No such website, or not yours                        |
-| `WEBSITE_URL_ALREADY_MONITORED` | 409            | This organization already monitors that URL          |
-| `INVALID_WEBSITE_URL`           | 400            | URL is malformed or unsupported                      |
-| `BLOCKED_WEBSITE_URL`           | 400            | URL points at an address that must not be reached    |
-| `MONITOR_NOT_FOUND`             | 404            | Monitor is not configured for that website           |
-| `MONITOR_DISABLED`              | 409            | Monitor must be on before it can be run              |
-| `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                       |
-| `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                           |
-| `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                 |
-| `CHANNEL_NOT_FOUND`             | 404            | No such channel, or not yours                        |
-| `CHANNEL_NAME_TAKEN`            | 409            | A channel with that name already exists              |
-| `API_KEY_NOT_FOUND`             | 404            | No such API key, or not yours                        |
-| `API_KEY_INVALID`               | 401            | Missing, malformed, unknown, revoked or expired key  |
-| `INSUFFICIENT_SCOPE`            | 403            | The key does not carry the route's scope             |
-| `API_QUOTA_EXCEEDED`            | 429            | The organization's daily API quota is used up        |
-| `REPORT_NOT_FOUND`              | 404            | No such report, or not yours                         |
-| `REPORT_NOT_READY`              | 409            | Report is still generating, or failed                |
-| `REPORT_SCHEDULE_NOT_FOUND`     | 404            | No such schedule, or not yours                       |
-| `PLAN_LIMIT_REACHED`            | 403            | The organization's plan does not allow it            |
+| Code                            | Typical status | Meaning                                                |
+| ------------------------------- | -------------- | ------------------------------------------------------ |
+| `VALIDATION_ERROR`              | 400            | Input failed a schema; see `fields`                    |
+| `UNAUTHENTICATED`               | 401            | No usable session                                      |
+| `FORBIDDEN`                     | 403            | Allowed to be here, not to do this                     |
+| `NOT_FOUND`                     | 404            | No such route or resource                              |
+| `CONFLICT`                      | 409            | Collided with something that exists                    |
+| `RATE_LIMITED`                  | 429            | Budget exhausted; see `Retry-After`                    |
+| `INTERNAL_ERROR`                | 500            | Unexpected fault; details are logged, never returned   |
+| `SERVICE_UNAVAILABLE`           | 503            | A dependency is down                                   |
+| `EMAIL_ALREADY_REGISTERED`      | 409            | Address is taken                                       |
+| `INVALID_CREDENTIALS`           | 401            | Sign-in failed; deliberately not more specific         |
+| `EMAIL_NOT_VERIFIED`            | 403            | Address not confirmed yet                              |
+| `INVALID_TOKEN`                 | 404            | Link is not valid                                      |
+| `TOKEN_EXPIRED`                 | 400            | Link has expired                                       |
+| `ORGANIZATION_NOT_FOUND`        | 404            | No such organization, or not yours                     |
+| `ORGANIZATION_SLUG_TAKEN`       | 409            | Slug is in use                                         |
+| `NOT_A_MEMBER`                  | 403            | Not a member of this organization                      |
+| `INSUFFICIENT_ROLE`             | 403            | Role does not carry the permission                     |
+| `CANNOT_REMOVE_LAST_OWNER`      | 409            | An organization must keep an owner                     |
+| `MEMBER_NOT_FOUND`              | 404            | No such member here                                    |
+| `CLIENT_NOT_FOUND`              | 404            | No such client, or not yours                           |
+| `CLIENT_NAME_TAKEN`             | 409            | A client with that name already exists                 |
+| `ALREADY_A_MEMBER`              | 409            | Already joined                                         |
+| `WEBSITE_NOT_FOUND`             | 404            | No such website, or not yours                          |
+| `WEBSITE_URL_ALREADY_MONITORED` | 409            | This organization already monitors that URL            |
+| `INVALID_WEBSITE_URL`           | 400            | URL is malformed or unsupported                        |
+| `BLOCKED_WEBSITE_URL`           | 400            | URL points at an address that must not be reached      |
+| `MONITOR_NOT_FOUND`             | 404            | Monitor is not configured for that website             |
+| `MONITOR_DISABLED`              | 409            | Monitor must be on before it can be run                |
+| `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                         |
+| `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                             |
+| `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                   |
+| `CHANNEL_NOT_FOUND`             | 404            | No such channel, or not yours                          |
+| `CHANNEL_NAME_TAKEN`            | 409            | A channel with that name already exists                |
+| `API_KEY_NOT_FOUND`             | 404            | No such API key, or not yours                          |
+| `API_KEY_INVALID`               | 401            | Missing, malformed, unknown, revoked or expired key    |
+| `INSUFFICIENT_SCOPE`            | 403            | The key does not carry the route's scope               |
+| `API_QUOTA_EXCEEDED`            | 429            | The organization's daily API quota is used up          |
+| `STATUS_PAGE_NOT_FOUND`         | 404            | No such status page, not yours, or not published       |
+| `STATUS_PAGE_SLUG_TAKEN`        | 409            | Another status page uses that address                  |
+| `CUSTOM_DOMAIN_TAKEN`           | 409            | The domain is verified for another status page         |
+| `CUSTOM_DOMAIN_NOT_VERIFIED`    | 400            | The TXT record is not there yet, or DNS did not answer |
+| `REPORT_NOT_FOUND`              | 404            | No such report, or not yours                           |
+| `REPORT_NOT_READY`              | 409            | Report is still generating, or failed                  |
+| `REPORT_SCHEDULE_NOT_FOUND`     | 404            | No such schedule, or not yours                         |
+| `PLAN_LIMIT_REACHED`            | 403            | The organization's plan does not allow it              |
 
 The full list lives in `src/contracts/api/errors.ts` and is mirrored by the dashboard.

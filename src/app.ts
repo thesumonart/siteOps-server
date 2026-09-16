@@ -6,14 +6,16 @@ import type { BillingProvider } from './billing/billing-provider.js';
 import { PriceCatalog } from './billing/price-catalog.js';
 import { AUTH_BASE_PATH, createAuth } from './config/auth.js';
 import { corsMiddleware } from './config/cors.js';
-import { env, isProduction } from './config/env.js';
+import { env, isProduction, trustedOrigins } from './config/env.js';
 import { HealthController } from './controllers/health.controller.js';
 import { EmailService } from './email/email.service.js';
+import { systemTxtLookup } from './integrations/dns-txt.js';
 import { errorHandler } from './errors/error-handler.js';
 import { requireAuth } from './middlewares/auth.middleware.js';
 import { authRateLimit, betterAuthHandler } from './middlewares/better-auth.middleware.js';
 import { notFoundHandler } from './middlewares/not-found.middleware.js';
 import { defaultRateLimit } from './middlewares/rate-limit.middleware.js';
+import { customDomainRouting } from './middlewares/custom-domain.middleware.js';
 import { requestId } from './middlewares/request-id.middleware.js';
 import { ApiKeyRepository } from './repositories/api-key.repository.js';
 import { AuditLogRepository } from './repositories/audit-log.repository.js';
@@ -27,18 +29,21 @@ import { ReportRepository } from './repositories/report.repository.js';
 import { MembershipRepository } from './repositories/membership.repository.js';
 import { NotificationRepository } from './repositories/notification.repository.js';
 import { OrganizationRepository } from './repositories/organization.repository.js';
+import { StatusPageRepository } from './repositories/status-page.repository.js';
 import { WebsiteRepository } from './repositories/website.repository.js';
 import type { MonitoringRuntime } from './jobs/monitoring-runtime.js';
 import { apiRoutes, type ApiDependencies } from './routes/index.js';
 import { STRIPE_WEBHOOK_PATH } from './routes/billing.routes.js';
 import { internalRoutes } from './routes/internal.routes.js';
 import { publicApiRoutes } from './routes/public-api.routes.js';
+import { publicStatusRoutes } from './routes/public-status.routes.js';
 import { ApiKeyService } from './services/api-key.service.js';
 import { AuditService } from './services/audit.service.js';
 import { AuthService } from './services/auth.service.js';
 import { BillingService } from './services/billing.service.js';
 import { ChannelService } from './services/channel.service.js';
 import { ClientService } from './services/client.service.js';
+import { CustomDomainResolver } from './services/custom-domain-resolver.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
 import { IncidentService } from './services/incident.service.js';
 import { MemberService } from './services/member.service.js';
@@ -46,9 +51,12 @@ import { MonitorConfigService } from './services/monitor-config.service.js';
 import { MonitorService } from './services/monitor.service.js';
 import { NotificationService } from './services/notification.service.js';
 import { OrganizationService } from './services/organization.service.js';
+import { PublicStatusCache } from './services/public-status-cache.js';
+import { PublicStatusService } from './services/public-status.service.js';
 import { BrandingService } from './services/branding.service.js';
 import { ReportGenerationService } from './services/report-generation.service.js';
 import { ReportService } from './services/report.service.js';
+import { StatusPageService } from './services/status-page.service.js';
 import { WebsiteService } from './services/website.service.js';
 import { asyncHandler } from './utils/async-handler.js';
 
@@ -117,6 +125,22 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.get('/ready', asyncHandler(health.readiness));
 
   /*
+   * Custom status page domains, before anything that authenticates.
+   *
+   * A request on a customer's verified domain may reach the public status
+   * endpoints and nothing else — not sign-in, not the dashboard API. Deciding
+   * that here, ahead of Better Auth, is what makes it true for every route
+   * rather than for the ones that remembered to check.
+   */
+  const statusPageRepository = new StatusPageRepository();
+  const publicStatusCache = new PublicStatusCache(env.STATUS_PAGE_CACHE_TTL_SECONDS * 1000);
+  const customDomainResolver = new CustomDomainResolver(statusPageRepository, publicStatusCache, [
+    ...trustedOrigins,
+    env.API_URL,
+  ]);
+  app.use(customDomainRouting(customDomainResolver));
+
+  /*
    * Order matters from here down.
    *
    * Better Auth is mounted before any body parser because its handler consumes
@@ -179,6 +203,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       clients: clientRepository,
       channels: channelRepository,
       apiKeys: apiKeyRepository,
+      statusPages: statusPageRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -246,6 +271,20 @@ export function createApp(options: CreateAppOptions = {}): Express {
     appUrl: env.APP_URL,
   });
   const brandingService = new BrandingService();
+  const statusPageService = new StatusPageService({
+    repository: statusPageRepository,
+    entitlements: entitlementService,
+    audit: auditService,
+    cache: publicStatusCache,
+    domains: customDomainResolver,
+    txtLookup: systemTxtLookup(),
+    cnameTarget: env.CUSTOM_DOMAIN_CNAME_TARGET ?? new URL(env.API_URL).hostname,
+  });
+  const publicStatusService = new PublicStatusService({
+    repository: statusPageRepository,
+    branding: brandingService,
+    cache: publicStatusCache,
+  });
   const reportGenerationService = new ReportGenerationService(
     reportRepository,
     entitlementService,
@@ -271,6 +310,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     reportService,
     reportGenerationService,
     notificationService,
+    statusPageService,
   };
 
   /*
@@ -280,6 +320,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
    * the dashboard router below happens to declare.
    */
   app.use('/api/v1', publicApiRoutes(dependencies));
+
+  // Published status pages: no session, no key. Its own router for the same
+  // reason as the public API — nothing mounted here may ever read a cookie.
+  app.use('/api/public', publicStatusRoutes({ publicStatusService }));
 
   app.use('/api', apiRoutes(dependencies));
 
@@ -349,6 +393,7 @@ interface UsageRepositories {
   readonly clients: ClientRepository;
   readonly channels: ChannelRepository;
   readonly apiKeys: ApiKeyRepository;
+  readonly statusPages: StatusPageRepository;
 }
 
 /**
@@ -362,12 +407,12 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
     websites: (organizationId) => repositories.websites.countForOrganization(organizationId),
     members: (organizationId) => repositories.memberships.countForOrganization(organizationId),
     clients: (organizationId) => repositories.clients.countForOrganization(organizationId),
-    statusPages: () => Promise.resolve(0),
+    statusPages: (organizationId) => repositories.statusPages.countForOrganization(organizationId),
     apiKeys: (organizationId) => repositories.apiKeys.countActive(organizationId),
     integrations: (organizationId) => repositories.channels.countForOrganization(organizationId),
     reportSchedules: (organizationId) =>
       repositories.reports.countSchedulesForOrganization(organizationId),
-    customDomains: () => Promise.resolve(0),
+    customDomains: (organizationId) => repositories.statusPages.countCustomDomains(organizationId),
     apiRequestsToday: (organizationId) => repositories.apiKeys.requestsToday(organizationId),
     aiGenerationsThisMonth: () => Promise.resolve(0),
   };

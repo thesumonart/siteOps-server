@@ -34,6 +34,7 @@ export * from './domain/permissions.js';
 export * from './domain/plan.js';
 export * from './domain/report.js';
 export * from './domain/roles.js';
+export * from './domain/status-page.js';
 export * from './domain/website.js';
 
 export * from './schemas/api-key.js';
@@ -48,6 +49,7 @@ export * from './schemas/monitoring.js';
 export * from './schemas/notification.js';
 export * from './schemas/organization.js';
 export * from './schemas/report.js';
+export * from './schemas/status-page.js';
 export * from './schemas/website.js';
 
 export * from './url/ip.js';

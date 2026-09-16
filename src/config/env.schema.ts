@@ -99,6 +99,31 @@ export const envSchema = z
      * limit and is counted in the database.
      */
     API_KEY_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(120),
+    /**
+     * Requests one address may make per minute to the public status page
+     * endpoints. Generous, because a status page is read by many people at once
+     * behind the same office or carrier address exactly when something is down.
+     */
+    PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(300),
+    /**
+     * How long a rendered public status page, and a hostname's custom-domain
+     * lookup, are reused before being rebuilt. The public page is also sent
+     * with this as its `Cache-Control` max-age.
+     */
+    STATUS_PAGE_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+    /**
+     * The hostname customers point their status page domain's CNAME at.
+     * Defaults to the host of `API_URL`, which is right unless a proxy or CDN in
+     * front of the API has its own name.
+     */
+    CUSTOM_DOMAIN_CNAME_TARGET: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, {
+        message: 'CUSTOM_DOMAIN_CNAME_TARGET must be a hostname, without a scheme or path.',
+      })
+      .optional(),
 
     /** Trust `X-Forwarded-For` only behind a proxy that actually sets it. */
     TRUST_PROXY: booleanFromEnv.default(false),

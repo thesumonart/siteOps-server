@@ -277,11 +277,15 @@ request
   ├─ corsMiddleware     explicit origin allowlist, never reflected
   │
   ├─ /health*           probes, before rate limiting and before /api
+  ├─ customDomainRouting on a verified status page domain, only /api/public/* exists
   │
   ├─ /api/auth/*        authRateLimit → Better Auth (raw body, own envelope adapter)
   │
   ├─ express.json       100kb limit
   ├─ defaultRateLimit   the general allowance
+  │
+  ├─ /api/v1            public API: API key only, never a session
+  ├─ /api/public       published status pages: no credentials of any kind
   │
   └─ /api               router
        ├─ rateLimit(...)          stricter, per route

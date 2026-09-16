@@ -16,6 +16,7 @@ import type { NotificationService } from '../services/notification.service.js';
 import type { OrganizationService } from '../services/organization.service.js';
 import type { ReportGenerationService } from '../services/report-generation.service.js';
 import type { ReportService } from '../services/report.service.js';
+import type { StatusPageService } from '../services/status-page.service.js';
 import type { WebsiteService } from '../services/website.service.js';
 import { apiKeyRoutes } from './api-key.routes.js';
 import { auditRoutes } from './audit.routes.js';
@@ -29,6 +30,7 @@ import { notificationRoutes } from './notification.routes.js';
 import { organizationRoutes } from './organization.routes.js';
 import { reportGenerationRoutes } from './report-generation.routes.js';
 import { reportRoutes } from './report.routes.js';
+import { statusPageRoutes } from './status-page.routes.js';
 import { websiteRoutes } from './website.routes.js';
 
 /**
@@ -57,6 +59,7 @@ export interface ApiDependencies {
   readonly reportService: ReportService;
   readonly reportGenerationService: ReportGenerationService;
   readonly notificationService: NotificationService;
+  readonly statusPageService: StatusPageService;
 }
 
 export function apiRoutes(dependencies: ApiDependencies): Router {
@@ -72,6 +75,7 @@ export function apiRoutes(dependencies: ApiDependencies): Router {
   router.use(notificationRoutes(dependencies));
   router.use(channelRoutes(dependencies));
   router.use(apiKeyRoutes(dependencies));
+  router.use(statusPageRoutes(dependencies));
   router.use(auditRoutes(dependencies));
   router.use(clientRoutes(dependencies));
   router.use(billingRoutes(dependencies));

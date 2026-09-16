@@ -27,6 +27,7 @@ end-to-end suite cleans up by addressing them directly. They are not renamed cas
 | `channel_deliveries`    | `channel-delivery.model.ts`      | app        | One event owed to one channel. Also a queue.      |
 | `api_keys`              | `api-key.model.ts`               | app        | Public API keys, by hash.                         |
 | `api_usage`             | `api-usage.model.ts`             | app        | Public API requests per organization per UTC day. |
+| `status_pages`          | `status-page.model.ts`           | app        | Public status pages and their custom domains.     |
 | `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                                 |
 | `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.             |
 
@@ -256,6 +257,22 @@ is multiplied by the number of API instances.
 | -------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `api_usage_org_day_unique` | `{ organizationId, day }` unique | The counter's key. The upsert filters on exactly this, so concurrent first requests of a day share a document. |
 | `api_usage_ttl`            | `{ dayStart: 1 }`, 35 days       | Retention.                                                                                                     |
+
+### `status_pages`
+
+Components hold a website id and a display name; deleting a website pulls it from every page. A
+custom domain is an embedded claim — domain, verification token, `verifiedAt` — rather than a
+collection of its own, because a page has at most one.
+
+| Index                                | Keys                                                          | Why                                                                                                                                                              |
+| ------------------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status_page_slug_unique`            | `{ slug }` unique                                             | The public URL, unique across tenants.                                                                                                                           |
+| `status_page_org_created_at`         | `{ organizationId, createdAt: -1 }`                           | The settings list.                                                                                                                                               |
+| `status_page_verified_domain_unique` | `{ customDomain.domain }` unique, partial on `verifiedAt` set | The host router's lookup, and the rule that one domain serves one page. Partial, so pending claims neither block the real owner nor appear to the router at all. |
+
+The public page's daily history reads `website_checks` through `check_website_status_checked_at`,
+which holds every field the grouping touches, so the aggregation is answered from the index alone.
+Open incidents are read through `incident_org_status_started_at`.
 
 ### `audit_logs`
 

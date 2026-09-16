@@ -13,6 +13,25 @@ deployed together.
 
 ### Added
 
+- **Public status pages and custom domains.** An organization publishes a chosen set of its websites
+  at `/api/public/status-pages/:slug`: each component's status, daily uptime over 30, 60 or 90 days,
+  and open outages and slowdowns. Websites appear under a display name, and nothing that identifies
+  or measures the infrastructure — ids, URLs, response times, status codes, error text — is ever
+  included.
+  - `GET`, `POST`, `PATCH` and `DELETE /api/status-pages` from the dashboard, behind the new
+    `status_page:read` (members) and `status_page:manage` (admins and owners) permissions. Pages
+    start unpublished; a lapsed plan takes them down and still lets them be unpublished or deleted.
+  - Custom domains: `PUT`, `POST …/verify` and `DELETE /api/status-pages/:id/custom-domain`. A domain
+    routes only once a TXT record at `_siteops-challenge.<domain>` carries the page's token, and the
+    first organization to prove a contested domain keeps it. `GET /api/public/status-page` serves the
+    page for the request's host; on a verified custom domain nothing outside `/api/public/` is served.
+  - History is grouped per UTC day in the database from a covering index and capped at the plan's
+    check retention. Rendered pages and host lookups are cached per instance.
+  - New settings `PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE` (300), `STATUS_PAGE_CACHE_TTL_SECONDS` (60)
+    and `CUSTOM_DOMAIN_CNAME_TARGET` (the host of `API_URL`).
+  - The `status_pages` and `custom_domains` plan features are released, and `maxStatusPages` and
+    `maxCustomDomains` are now counted. One new collection, `status_pages`, needs
+    `pnpm indexes:sync`.
 - **Public API and API keys.** `/api/v1` exposes monitors, their checks and metrics, and incidents
   to integrations, authenticated with an API key and never a session. Every route calls the service
   the dashboard's route does, so validation, plan limits and tenant isolation are the same.

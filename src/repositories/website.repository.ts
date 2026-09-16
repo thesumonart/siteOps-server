@@ -4,6 +4,7 @@ import type { WebsiteStatus } from '../contracts/index.js';
 import {
   IncidentModel,
   MonitorResultModel,
+  StatusPageModel,
   WebsiteCheckModel,
   WebsiteModel,
   WebsiteMonitorModel,
@@ -337,6 +338,23 @@ export class WebsiteRepository {
       { $set: { clientId: null } },
     ).exec();
 
+    return result.modifiedCount;
+  }
+
+  /**
+   * Removes a website from every status page that shows it.
+   *
+   * A deleted website left on a public page would read as "no data" forever —
+   * true, and useless to every visitor.
+   */
+  async detachFromStatusPages(
+    organizationId: Types.ObjectId,
+    websiteId: Types.ObjectId,
+  ): Promise<number> {
+    const result = await StatusPageModel.updateMany(
+      { organizationId, 'components.websiteId': websiteId },
+      { $pull: { components: { websiteId } } },
+    ).exec();
     return result.modifiedCount;
   }
 

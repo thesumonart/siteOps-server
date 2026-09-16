@@ -282,6 +282,7 @@ export class WebsiteService {
     // would go on claiming for a website that no longer exists.
     await this.repository.deleteIncidentsFor(deleted._id);
     await this.repository.deleteMonitorsFor(deleted._id);
+    await this.repository.detachFromStatusPages(organization.objectId, deleted._id);
     // Checks can number in the hundreds of thousands, so they are cleaned up
     // without blocking the response — they are unreachable once the website is
     // gone (every query scopes by websiteId) and expire via the TTL index.

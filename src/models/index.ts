@@ -30,6 +30,7 @@ export * from './notification-settings.model.js';
 export * from './organization.model.js';
 export * from './report.model.js';
 export * from './report-schedule.model.js';
+export * from './status-page.model.js';
 export * from './organization-member.model.js';
 export * from './user.model.js';
 export * from './website.model.js';

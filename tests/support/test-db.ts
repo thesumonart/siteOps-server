@@ -17,6 +17,7 @@ import {
   OrganizationModel,
   ReportModel,
   ReportScheduleModel,
+  StatusPageModel,
   UserModel,
   WebsiteCheckModel,
   WebsiteModel,
@@ -62,6 +63,7 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => ChannelDeliveryModel.syncIndexes(),
   () => ApiKeyModel.syncIndexes(),
   () => ApiUsageModel.syncIndexes(),
+  () => StatusPageModel.syncIndexes(),
 ];
 
 const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
@@ -85,6 +87,7 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => ChannelDeliveryModel.deleteMany({}).exec(),
   () => ApiKeyModel.deleteMany({}).exec(),
   () => ApiUsageModel.deleteMany({}).exec(),
+  () => StatusPageModel.deleteMany({}).exec(),
 ];
 
 let connected = false;

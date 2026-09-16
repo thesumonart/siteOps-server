@@ -29,6 +29,8 @@ export const PERMISSIONS = [
   'integration:manage',
   'api_key:read',
   'api_key:manage',
+  'status_page:read',
+  'status_page:manage',
   'audit_log:read',
   'client:read',
   'client:manage',
@@ -49,6 +51,9 @@ const MEMBER_PERMISSIONS: readonly Permission[] = [
   'incident:read',
   'notification:read',
   'notification:update',
+  // A status page's configuration is what the public already sees, so a member
+  // may read it; publishing and pointing a domain at it is an admin's call.
+  'status_page:read',
   // Members may read a report but not spend the organization's quota
   // generating one, and not change what is mailed to a client every month.
   'report:read',
@@ -73,6 +78,7 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   // capped at the issuer's own permissions — see API_KEY_SCOPE_PERMISSIONS.
   'api_key:read',
   'api_key:manage',
+  'status_page:manage',
   'client:read',
   'client:manage',
   'report:create',

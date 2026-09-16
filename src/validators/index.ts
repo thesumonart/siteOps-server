@@ -23,4 +23,5 @@ export * from './monitor.validator.js';
 export * from './notification.validator.js';
 export * from './organization.validator.js';
 export * from './report.validator.js';
+export * from './status-page.validator.js';
 export * from './website.validator.js';

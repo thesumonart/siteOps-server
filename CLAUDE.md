@@ -157,6 +157,9 @@ renamed field until a screen breaks in front of someone, so these are load-beari
   parses exactly that.
 - The dashboard's prefix is `/api`, not `/api/v1`. `/api/v1` is the public API for API keys — a
   separate router that never accepts a session — and nothing the dashboard calls lives under it.
+- `/api/public` serves published status pages to anyone, with a wildcard CORS origin. Nothing under
+  it may read a cookie, a session or a key, and on a verified custom domain nothing outside it is
+  served at all.
 - The session cookie is `siteops.session_token`. The dashboard's routing middleware matches it by
   name; renaming it signs everyone out.
 - The email-verification token is an HS256 JWT over `{ email }` signed with `AUTH_SECRET`. The

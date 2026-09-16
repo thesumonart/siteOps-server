@@ -321,6 +321,70 @@ A key is a credential that acts for a whole organization, from outside it, for a
 A key belongs to the organization, not to the person who made it. When somebody leaves, revoke the
 keys they issued; the list says who issued each one.
 
+## Public status pages and custom domains
+
+The first surface SiteOps serves to people who have no account, about infrastructure that is not
+theirs.
+
+### What a stranger may learn
+
+A component's display name, its public status, its daily uptime and whether an outage or slowdown is
+open. Nothing else. `PublicStatusPageDto` is built field by field for that audience rather than
+filtered from an internal DTO, so a field added to a website does not reach the public by default.
+
+- **No identifiers.** No website, page or organization id: nothing a visitor could try against
+  another endpoint.
+- **No measurements.** No response times, status codes or error messages. An error message is often
+  a map of exactly what broke — a hostname, a port, an upstream — and response times profile the
+  hosting.
+- **No internal names.** Components are shown under a display name chosen for the page, never the
+  website's name or URL.
+- **Only outages and slowdowns.** An expiring certificate or an SEO regression is the agency's
+  business, not an announcement to its client's customers. Paused monitoring reads as "no data".
+- **Unpublished is nonexistent.** Draft pages, unknown slugs and pages whose plan lapsed are one
+  `404`.
+
+### Tenant isolation without a tenant
+
+A public request names a slug or a hostname, not an organization, so there is no membership to
+resolve. The page names the organization instead, and every read after it is scoped by that id.
+Component website ids are checked against the organization when they are stored, and again — as a
+tenant-scoped query — before any history is read, so a page document edited by anything other than
+the API still cannot show another tenant's website.
+
+### Cross-origin reads
+
+`/api/public` answers any origin with `Access-Control-Allow-Origin: *` and never
+`Allow-Credentials`. That is safe there and nowhere else: nothing under that router reads a cookie,
+a session or a key, so there is no ambient authority for a foreign page to borrow. It is a separate
+router mounted outside `/api` so a session-reading route cannot end up behind the wildcard.
+
+### Custom domains
+
+- **Proof, not a claim.** A domain routes only after a TXT record at `_siteops-challenge.<domain>`
+  carries the page's own random token. Until then the host means nothing. The token is not secret —
+  it is published in DNS by design — so it is stored as it is.
+- **First to prove wins.** Uniqueness applies to verified domains only (a partial unique index).
+  A plain unique index would let anyone claim `status.acme.com` first and lock Acme out of its own
+  name; here any number of organizations can be pending, and the database decides who verifies.
+- **A customer's domain is not SiteOps.** `customDomainRouting` runs before Better Auth. On a
+  verified custom domain every path outside `/api/public/` is a `404`, so sign-in, sessions and the
+  dashboard API are never served on a name somebody else controls in DNS. SiteOps's own hosts
+  (`APP_URL`, `API_URL`, the trusted origins, loopback) are recognised without a query and can never
+  be claimed.
+- **Host lookups are bounded.** Hostnames come from a header the client chooses, so the lookup cache
+  is capped and cleared rather than grown without limit.
+- **Verification is rate limited.** Each attempt is an outbound DNS query; 30 an hour per address.
+  A TXT lookup needs no SSRF screen — it goes to the configured resolver, not to the name asked
+  about, and the answer is compared, never followed.
+
+### Load
+
+A status page is read by everyone at once exactly when something is down. Rendered pages and host
+lookups are cached per instance for `STATUS_PAGE_CACHE_TTL_SECONDS`, the endpoint has its own
+per-address budget, and the daily history is grouped in the database from a covering index rather
+than read as documents — ninety days of a one-minute monitor is over a hundred thousand checks.
+
 ## Notification channels and outgoing webhooks
 
 A webhook is the second place SiteOps sends a request to a URL a customer chose, and it gets the same
