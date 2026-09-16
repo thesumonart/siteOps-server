@@ -8,6 +8,7 @@ import { AUTH_BASE_PATH, createAuth } from './config/auth.js';
 import { corsMiddleware } from './config/cors.js';
 import { env, isProduction, trustedOrigins } from './config/env.js';
 import { HealthController } from './controllers/health.controller.js';
+import { languageModelFrom } from './ai/language-model-factory.js';
 import { EmailService } from './email/email.service.js';
 import { systemTxtLookup } from './integrations/dns-txt.js';
 import { errorHandler } from './errors/error-handler.js';
@@ -22,6 +23,7 @@ import { AuditLogRepository } from './repositories/audit-log.repository.js';
 import { BillingEventRepository } from './repositories/billing-event.repository.js';
 import { ChannelRepository } from './repositories/channel.repository.js';
 import { CheckResultRepository } from './repositories/check-result.repository.js';
+import { IncidentAnalysisRepository } from './repositories/incident-analysis.repository.js';
 import { ClientRepository } from './repositories/client.repository.js';
 import { IncidentRepository } from './repositories/incident.repository.js';
 import { MonitorRepository } from './repositories/monitor.repository.js';
@@ -45,6 +47,8 @@ import { ChannelService } from './services/channel.service.js';
 import { ClientService } from './services/client.service.js';
 import { CustomDomainResolver } from './services/custom-domain-resolver.js';
 import { EntitlementService, type UsageCounters } from './services/entitlement.service.js';
+import { IncidentAnalysisScheduler } from './services/incident-analysis-scheduler.js';
+import { IncidentAnalysisService } from './services/incident-analysis.service.js';
 import { IncidentService } from './services/incident.service.js';
 import { MemberService } from './services/member.service.js';
 import { MonitorConfigService } from './services/monitor-config.service.js';
@@ -193,6 +197,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const billingEventRepository = new BillingEventRepository();
   const channelRepository = new ChannelRepository();
   const apiKeyRepository = new ApiKeyRepository();
+  const incidentAnalysisRepository = new IncidentAnalysisRepository();
 
   const auditService = new AuditService(auditLogRepository);
   const entitlementService = new EntitlementService(
@@ -204,6 +209,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       channels: channelRepository,
       apiKeys: apiKeyRepository,
       statusPages: statusPageRepository,
+      incidentAnalyses: incidentAnalysisRepository,
     }),
   );
   const organizationService = new OrganizationService(organizationRepository, auditService);
@@ -239,7 +245,26 @@ export function createApp(options: CreateAppOptions = {}): Express {
     entitlementService,
     auditService,
   );
-  const incidentService = new IncidentService(incidentRepository, websiteRepository, auditService);
+  /*
+   * The API never calls a model: it queues analyses, and the worker writes
+   * them. It only needs to know whether a model is configured, so it can
+   * refuse a request honestly instead of queuing one nothing will ever run.
+   */
+  const incidentAnalysisService = new IncidentAnalysisService({
+    repository: incidentAnalysisRepository,
+    entitlements: entitlementService,
+    scheduler: new IncidentAnalysisScheduler(incidentAnalysisRepository, {
+      enabled: languageModelFrom(env) !== null,
+      delaySeconds: env.AI_ANALYSIS_DELAY_SECONDS,
+      minDurationSeconds: env.AI_ANALYSIS_MIN_DURATION_SECONDS,
+    }),
+  });
+  const incidentService = new IncidentService(
+    incidentRepository,
+    websiteRepository,
+    auditService,
+    incidentAnalysisService,
+  );
   const reportService = new ReportService(
     checkResultRepository,
     incidentRepository,
@@ -307,6 +332,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     monitorService,
     monitorConfigService,
     incidentService,
+    incidentAnalysisService,
     reportService,
     reportGenerationService,
     notificationService,
@@ -394,6 +420,7 @@ interface UsageRepositories {
   readonly channels: ChannelRepository;
   readonly apiKeys: ApiKeyRepository;
   readonly statusPages: StatusPageRepository;
+  readonly incidentAnalyses: IncidentAnalysisRepository;
 }
 
 /**
@@ -414,7 +441,8 @@ function buildUsageCounters(repositories: UsageRepositories): UsageCounters {
       repositories.reports.countSchedulesForOrganization(organizationId),
     customDomains: (organizationId) => repositories.statusPages.countCustomDomains(organizationId),
     apiRequestsToday: (organizationId) => repositories.apiKeys.requestsToday(organizationId),
-    aiGenerationsThisMonth: () => Promise.resolve(0),
+    aiGenerationsThisMonth: (organizationId) =>
+      repositories.incidentAnalyses.generationsThisMonth(organizationId),
   };
 }
 

@@ -1,6 +1,7 @@
 import { env } from '../../src/config/env.js';
 import { connectToDatabase, disconnectFromDatabase } from '../../src/database/connection.js';
 import {
+  AiUsageModel,
   ApiKeyModel,
   ApiUsageModel,
   AuditLogModel,
@@ -64,6 +65,7 @@ const SYNC_INDEXES: readonly (() => Promise<unknown>)[] = [
   () => ApiKeyModel.syncIndexes(),
   () => ApiUsageModel.syncIndexes(),
   () => StatusPageModel.syncIndexes(),
+  () => AiUsageModel.syncIndexes(),
 ];
 
 const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
@@ -88,6 +90,7 @@ const CLEAR_COLLECTIONS: readonly (() => Promise<unknown>)[] = [
   () => ApiKeyModel.deleteMany({}).exec(),
   () => ApiUsageModel.deleteMany({}).exec(),
   () => StatusPageModel.deleteMany({}).exec(),
+  () => AiUsageModel.deleteMany({}).exec(),
 ];
 
 let connected = false;

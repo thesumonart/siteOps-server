@@ -385,6 +385,55 @@ lookups are cached per instance for `STATUS_PAGE_CACHE_TTL_SECONDS`, the endpoin
 per-address budget, and the daily history is grouped in the database from a covering index rather
 than read as documents — ninety days of a one-minute monitor is over a hundred thousand checks.
 
+## AI incident analysis
+
+The one place SiteOps sends tenant data to a third party it did not choose per tenant: the
+deployment's configured model provider. Everything below follows from taking that seriously.
+
+### What leaves, and what does not
+
+Sent: an incident's times, type, status codes, error types and error messages; response-time
+statistics and a collapsed timeline of checks around it; overlapping incidents; the website's name,
+**hostname** and check interval. Not sent: the URL's path or query — which can carry a token — any
+person's name or email, the organization's name, credentials, or anything from another incident's
+organization. The facts are assembled field by field in `src/ai/incident-facts.ts`, so a field added
+to a model does not reach a provider by default. Nothing is sent at all unless an operator configures
+a key, and then only for organizations whose plan includes AI insights.
+
+### Prompt injection
+
+Error messages and status lines are written by the monitored server, which is not necessarily
+friendly. The facts are one JSON block inside `<incident_data>`, with every `<` escaped, so no string
+can close the block; error text is clipped to 200 characters; and the standing instructions say the
+block is data that never contains instructions. The worst an injection can then do is mislead the
+summary shown to the organization that owns the incident — it cannot reach another tenant, call a
+tool, or change anything, because the model is given no tools and its output is only stored.
+
+### Rendering the output
+
+A summary is untrusted Markdown. The API stores it as text, capped at 12,000 characters, and the
+contract says to render it without raw HTML. It is never interpolated into an email or a page on the
+server.
+
+### Keys and errors
+
+Provider keys are read only by `config/env.ts` and sent only to the provider's fixed API host. A
+provider's error message is logged for the operator, truncated, and never stored or returned: the
+reason shown to an organization names the HTTP status and the provider's error _type_, restricted to
+a short identifier.
+
+### Spend
+
+Each analysis is reserved from the plan's `aiGenerationsPerMonth` before the provider is called, by
+an atomic conditional increment — concurrent analyses cannot each find room and overspend it. A
+request to regenerate is rate limited, needs `incident:update`, and returns the pending analysis
+instead of queuing a second one.
+
+### Tenancy
+
+Analyses are read through the incident, scoped by organization, and — for a client membership — by
+the website's client, so a client portal user cannot read the analysis of another client's outage.
+
 ## Notification channels and outgoing webhooks
 
 A webhook is the second place SiteOps sends a request to a URL a customer chose, and it gets the same

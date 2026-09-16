@@ -178,6 +178,23 @@ carries a delivery id stable across attempts, so a receiver can drop a repeat.
 embeds, signing, and the guarded POST. It sits beside `src/billing/`, the other adapter to somebody
 else's API.
 
+### AI analyses are queued on the incident, and written by the worker
+
+The API never calls a model. A resolved incident — or a person asking — marks the incident's
+embedded `analysis` as pending; a fifth loop, present only when a provider key is configured, claims
+it with the same lease as every other queue and writes the summary back.
+
+- **The incidents collection is the queue.** An analysis belongs to exactly one incident and is read
+  with it, so a collection of its own would be a join for nothing. A partial index keeps the claim
+  from ever seeing a finished incident.
+- **A loop of its own.** A generation takes tens of seconds on a third party's servers. Sharing the
+  channel loop would let a slow model delay an outage alert.
+- **No SDKs.** `src/ai/` holds a one-method `LanguageModel` interface and two REST adapters,
+  beside `src/billing/` and `src/integrations/`, the other adapters to somebody else's API.
+- **Facts, not rows.** What the model is given is shaped by a pure module that can be read and tested
+  without a database or a provider. The prompt is short because the facts are already the analysis's
+  skeleton.
+
 ### Reports are queries, not documents
 
 `ReportService` answers uptime, response-time and dashboard questions by aggregating the check

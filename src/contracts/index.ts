@@ -28,6 +28,7 @@ export * from './domain/channel.js';
 export * from './domain/check.js';
 export * from './domain/client.js';
 export * from './domain/incident.js';
+export * from './domain/incident-analysis.js';
 export * from './domain/monitor.js';
 export * from './domain/notification.js';
 export * from './domain/permissions.js';

@@ -8,6 +8,7 @@ import type { BillingService } from '../services/billing.service.js';
 import type { ChannelService } from '../services/channel.service.js';
 import type { ClientService } from '../services/client.service.js';
 import type { EntitlementService } from '../services/entitlement.service.js';
+import type { IncidentAnalysisService } from '../services/incident-analysis.service.js';
 import type { IncidentService } from '../services/incident.service.js';
 import type { MemberService } from '../services/member.service.js';
 import type { MonitorConfigService } from '../services/monitor-config.service.js';
@@ -56,6 +57,7 @@ export interface ApiDependencies {
   readonly monitorService: MonitorService;
   readonly monitorConfigService: MonitorConfigService;
   readonly incidentService: IncidentService;
+  readonly incidentAnalysisService: IncidentAnalysisService;
   readonly reportService: ReportService;
   readonly reportGenerationService: ReportGenerationService;
   readonly notificationService: NotificationService;

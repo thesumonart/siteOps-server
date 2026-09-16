@@ -1,5 +1,6 @@
 import { syncAuthIndexes } from './auth-indexes.js';
 import {
+  AiUsageModel,
   ApiKeyModel,
   ApiUsageModel,
   AuditLogModel,
@@ -82,6 +83,12 @@ export const MANAGED_MODELS = [
    * two organizations from serving one domain.
    */
   StatusPageModel,
+  /*
+   * One counter per organization per month, reserved before a provider is
+   * called. Without the unique index, two first generations of a month could
+   * each start a count, and the plan's allowance would be granted twice.
+   */
+  AiUsageModel,
   AuditLogModel,
   /*
    * Billing events carry the unique index on `eventId` that makes webhook

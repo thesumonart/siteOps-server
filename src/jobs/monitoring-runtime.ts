@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { languageModelFrom } from '../ai/language-model-factory.js';
 import { env } from '../config/env.js';
 import { MAX_REQUEST_TIMEOUT_MS, type MonitorType } from '../contracts/index.js';
 import { EmailService } from '../email/email.service.js';
@@ -16,12 +17,17 @@ import { createSslRunner } from '../monitoring/runners/ssl.runner.js';
 import type { AnomalySettings } from '../monitoring/anomaly-detection.js';
 import { ChannelEventPublisher } from '../monitoring/channel-dispatch.js';
 import { PlanLookup } from '../monitoring/plan-lookup.js';
+import { AuditLogRepository } from '../repositories/audit-log.repository.js';
 import { ChannelRepository } from '../repositories/channel.repository.js';
+import { IncidentAnalysisRepository } from '../repositories/incident-analysis.repository.js';
 import { NotificationRepository } from '../repositories/notification.repository.js';
 import { ReportRepository } from '../repositories/report.repository.js';
+import { AuditService } from '../services/audit.service.js';
 import { BrandingService } from '../services/branding.service.js';
+import { IncidentAnalysisScheduler } from '../services/incident-analysis-scheduler.js';
 import { createLogger } from '../utils/logger.js';
 import { ChannelDeliveryLoop } from './channel-delivery-loop.js';
+import { IncidentAnalysisLoop } from './incident-analysis-loop.js';
 import {
   combineMonitorNotifiers,
   createChannelMonitorNotifier,
@@ -90,6 +96,12 @@ const CHANNEL_LEASE_DURATION_MS = env.CHANNEL_DELIVERY_TIMEOUT_MS + 30_000;
  */
 const PLAN_CACHE_TTL_MS = 60_000;
 
+/**
+ * How long an incident analysis claim is held: one generation's timeout, plus
+ * the time to gather the checks before it and write the summary after.
+ */
+const ANALYSIS_LEASE_DURATION_MS = env.AI_REQUEST_TIMEOUT_MS + 60_000;
+
 const ANOMALY_SETTINGS: AnomalySettings = {
   windowSize: env.ANOMALY_WINDOW_SIZE,
   minSamples: env.ANOMALY_MIN_SAMPLES,
@@ -121,6 +133,8 @@ export interface MonitoringRuntimeSnapshot {
   readonly lastMonitorTickAt: string | null;
   readonly lastReportTickAt: string | null;
   readonly lastChannelTickAt: string | null;
+  /** Null when no model is configured, and so no analysis loop runs. */
+  readonly lastAnalysisTickAt: string | null;
 }
 
 /**
@@ -160,6 +174,7 @@ export class MonitoringRuntime {
   private readonly monitorLoop: MonitorSchedulerLoop;
   private readonly reportLoop: ReportSchedulerLoop;
   private readonly channelLoop: ChannelDeliveryLoop;
+  private readonly analysisLoop: IncidentAnalysisLoop | null;
 
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private started = false;
@@ -200,6 +215,42 @@ export class MonitoringRuntime {
       this.channelLoop.wake();
     });
 
+    /*
+     * AI incident analysis, only where a model is configured. The uptime job
+     * queues an analysis when an outage or slowdown ends; a loop of its own
+     * writes it, because a generation takes tens of seconds on somebody else's
+     * servers and must never hold up a check or an alert.
+     */
+    const plans = new PlanLookup(PLAN_CACHE_TTL_MS);
+    const model = languageModelFrom(env);
+    const analysisRepository = new IncidentAnalysisRepository();
+    const analyses = new IncidentAnalysisScheduler(analysisRepository, {
+      enabled: model !== null,
+      delaySeconds: env.AI_ANALYSIS_DELAY_SECONDS,
+      minDurationSeconds: env.AI_ANALYSIS_MIN_DURATION_SECONDS,
+    });
+    this.analysisLoop = model
+      ? new IncidentAnalysisLoop(
+          {
+            pollIntervalMs: env.AI_ANALYSIS_POLL_INTERVAL_SECONDS * 1000,
+            queue: {
+              batchSize: env.AI_ANALYSIS_CONCURRENCY,
+              leaseDurationMs: ANALYSIS_LEASE_DURATION_MS,
+            },
+            job: {
+              maxAttempts: env.AI_ANALYSIS_MAX_ATTEMPTS,
+              maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS,
+            },
+          },
+          {
+            repository: analysisRepository,
+            model,
+            plans,
+            audit: new AuditService(new AuditLogRepository()),
+          },
+        )
+      : null;
+
     this.uptimeLoop = new SchedulerLoop(
       {
         pollIntervalMs: env.MONITOR_POLL_INTERVAL_SECONDS * 1000,
@@ -215,7 +266,7 @@ export class MonitoringRuntime {
           anomaly: ANOMALY_SETTINGS,
         },
       },
-      { emailService, notifications, channels, plans: new PlanLookup(PLAN_CACHE_TTL_MS) },
+      { emailService, notifications, channels, plans, analyses },
     );
 
     /*
@@ -275,6 +326,7 @@ export class MonitoringRuntime {
     this.monitorLoop.start();
     this.reportLoop.start();
     this.channelLoop.start();
+    this.analysisLoop?.start();
 
     this.heartbeatTimer = setInterval(() => {
       void this.writeHeartbeat();
@@ -295,6 +347,7 @@ export class MonitoringRuntime {
         concurrency: env.MONITOR_CONCURRENCY,
         leaseDurationMs: LEASE_DURATION_MS,
         emailConfigured: this.emailConfigured,
+        aiAnalysis: this.analysisLoop !== null,
       },
       'monitoring_runtime.started',
     );
@@ -320,6 +373,7 @@ export class MonitoringRuntime {
       this.monitorLoop.stop(),
       this.reportLoop.stop(),
       this.channelLoop.stop(),
+      this.analysisLoop?.stop(),
     ]);
 
     const failure = results.find((result) => result.status === 'rejected');
@@ -381,6 +435,12 @@ export class MonitoringRuntime {
     const [channelOutcome] = await Promise.allSettled([this.channelLoop.tickNow()]);
     if (channelOutcome) record('channels', channelOutcome);
 
+    // Last: nothing above waits on it, and one generation can take a minute.
+    if (this.analysisLoop) {
+      const [analysisOutcome] = await Promise.allSettled([this.analysisLoop.tickNow()]);
+      if (analysisOutcome) record('analysis', analysisOutcome);
+    }
+
     await this.writeHeartbeat(failed.length);
 
     return { ran, failed };
@@ -395,6 +455,7 @@ export class MonitoringRuntime {
       lastMonitorTickAt: toIso(this.monitorLoop.lastTickAt()),
       lastReportTickAt: toIso(this.reportLoop.lastTickAt()),
       lastChannelTickAt: toIso(this.channelLoop.lastTickAt()),
+      lastAnalysisTickAt: toIso(this.analysisLoop?.lastTickAt() ?? null),
     };
   }
 

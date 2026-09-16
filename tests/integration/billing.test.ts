@@ -91,11 +91,11 @@ describe.skipIf(!available)('GET /api/billing/plans', () => {
     expect(agency?.features).toContain('white_label');
     expect(free?.features).not.toContain('white_label');
 
-    // Features the plan grants but the product has not shipped are reported
-    // separately, so the pricing page can say "coming soon" rather than
-    // advertising them as available.
-    expect(agency?.features).not.toContain('ai_insights');
-    expect(agency?.upcomingFeatures).toContain('ai_insights');
+    // Features the plan grants but the product has not shipped would be reported
+    // separately, so the pricing page could say "coming soon" rather than
+    // advertising them as available. Every granted feature has now shipped.
+    expect(agency?.features).toContain('ai_insights');
+    expect(agency?.upcomingFeatures).toEqual([]);
   });
 });
 

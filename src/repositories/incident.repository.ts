@@ -59,6 +59,9 @@ export class IncidentRepository {
         // two websites fail in the same millisecond; the index carries both keys.
         .sort({ startedAt: -1, _id: -1 })
         .limit(filter.pageSize + 1)
+        // A list shows whether an analysis exists, never its text: up to twelve
+        // thousand characters per row is not something to load a page of.
+        .select({ 'analysis.summary': 0 })
         .lean<IncidentRecord[]>()
         .exec()
     );

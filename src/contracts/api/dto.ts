@@ -36,6 +36,7 @@ import {
   type ScheduleFrequency,
 } from '../domain/report.js';
 import { type OrganizationRole } from '../domain/roles.js';
+import { type AiProvider, type IncidentAnalysisStatus } from '../domain/incident-analysis.js';
 import { type Permission } from '../domain/permissions.js';
 import {
   type CustomDomainStatus,
@@ -360,6 +361,42 @@ export interface IncidentDto {
   readonly lastStatusCode: number | null;
   readonly lastErrorType: CheckErrorType | null;
   readonly lastErrorMessage: string | null;
+  /**
+   * Where the AI analysis stands, without its text — lists stay light. Null
+   * when none was queued. The summary itself is
+   * `GET /api/incidents/:incidentId/analysis`.
+   */
+  readonly analysis: IncidentAnalysisStateDto | null;
+}
+
+export interface IncidentAnalysisStateDto {
+  readonly status: IncidentAnalysisStatus;
+  readonly generatedAt: string | null;
+}
+
+/**
+ * An incident's AI-written post-incident summary.
+ *
+ * `summary` is Markdown with a fixed set of sections: Summary, Timeline,
+ * Impact, Likely cause and Recommended follow-up. It is model output built
+ * partly from text the monitored website sent — error messages, status lines —
+ * so it must be rendered as Markdown without raw HTML, never injected as markup.
+ *
+ * A regeneration keeps the previous summary readable while the new one is
+ * written: `status` is `pending` and `summary` is the last completed one.
+ */
+export interface IncidentAnalysisDto {
+  readonly incidentId: string;
+  readonly status: IncidentAnalysisStatus;
+  readonly summary: string | null;
+  readonly provider: AiProvider | null;
+  readonly model: string | null;
+  readonly generatedAt: string | null;
+  readonly requestedAt: string;
+  /** Null for an analysis queued automatically when the incident resolved. */
+  readonly requestedByName: string | null;
+  /** Why the latest attempt failed or was skipped. Null otherwise. */
+  readonly failureReason: string | null;
 }
 
 export interface NotificationDto {

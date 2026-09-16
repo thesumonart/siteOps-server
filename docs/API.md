@@ -110,6 +110,7 @@ Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-R
 | channel create                      | 30 per hour                                    |
 | channel test                        | 10 per minute                                  |
 | channel secret rotation             | 20 per hour                                    |
+| incident analysis request           | 20 per hour                                    |
 | custom domain verification          | 30 per hour                                    |
 | public status pages                 | `PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE` / minute |
 
@@ -573,6 +574,63 @@ outage over, not that the site is back.
 | Failure          | Status | Code                        |
 | ---------------- | ------ | --------------------------- |
 | Already resolved | 409    | `INCIDENT_ALREADY_RESOLVED` |
+
+### `GET /api/incidents/:incidentId/analysis`
+
+Permission: `incident:read`. The AI-written post-incident summary, when one exists.
+
+```json
+{
+  "incidentId": "…",
+  "status": "completed",
+  "summary": "## Summary\nThe storefront returned HTTP 503 for twelve minutes…",
+  "provider": "anthropic",
+  "model": "claude-opus-5",
+  "generatedAt": "2026-09-16T10:24:00.000Z",
+  "requestedAt": "2026-09-16T10:22:00.000Z",
+  "requestedByName": null,
+  "failureReason": null
+}
+```
+
+- `status` is `pending`, `completed`, `failed` or `skipped`. `failureReason` says why an
+  analysis failed or was skipped — the plan no longer includes it, the month's allowance is used up
+  — and, while pending, why the last attempt is being retried.
+- `summary` is Markdown with the sections **Summary**, **Timeline**, **Impact**, **Likely cause**
+  and **Recommended follow-up**. It is model output built partly from text the monitored server
+  sent, so render it as Markdown **without raw HTML**.
+- While a regeneration is pending, `summary` is still the previous one.
+- `requestedByName` is null for an analysis queued automatically.
+- Readable on any plan once written. A client membership reads only its own websites' incidents.
+
+Every `IncidentDto` carries `analysis: { status, generatedAt } | null` — never the text, so incident
+lists stay light.
+
+**When analyses are written.** Only on a deployment with a model configured (see
+`docs/MONITORING.md`), for organizations whose plan includes `ai_insights` (Agency and Pro). A
+resolved **outage** or **response-time slowdown** that lasted at least
+`AI_ANALYSIS_MIN_DURATION_SECONDS` is queued automatically and written
+`AI_ANALYSIS_DELAY_SECONDS` after it ends. Each analysis counts against `aiGenerationsPerMonth`;
+one that fails does not.
+
+| Failure                        | Status | Code                          |
+| ------------------------------ | ------ | ----------------------------- |
+| No such incident, or not yours | 404    | `INCIDENT_NOT_FOUND`          |
+| Never analysed                 | 404    | `INCIDENT_ANALYSIS_NOT_FOUND` |
+
+### `POST /api/incidents/:incidentId/analysis`
+
+Permission: `incident:update`. Queues an analysis now — for an incident too short to be analysed
+automatically, one resolved before the feature existed, or a regeneration. `202` with the pending
+`IncidentAnalysisDto`; poll the `GET` for the summary. Asking again while one is pending returns
+that one and queues nothing. Limited to 20 an hour.
+
+| Failure                                          | Status | Code                    |
+| ------------------------------------------------ | ------ | ----------------------- |
+| No model configured on this deployment           | 503    | `AI_NOT_CONFIGURED`     |
+| Plan without `ai_insights`, or allowance used up | 403    | `PLAN_LIMIT_REACHED`    |
+| Incident still open                              | 409    | `INCIDENT_NOT_RESOLVED` |
+| Not an outage or slowdown                        | 400    | `VALIDATION_ERROR`      |
 
 ---
 
@@ -1361,6 +1419,7 @@ Two, both checked before a route runs:
 | `GET /api/v1/metrics/summary`        | `metrics:read`    | `GET /api/dashboard/stats`        |
 | `GET /api/v1/incidents`              | `incidents:read`  | `GET /api/incidents`              |
 | `GET /api/v1/incidents/:id`          | `incidents:read`  | `GET /api/incidents/:id`          |
+| `GET /api/v1/incidents/:id/analysis` | `incidents:read`  | `GET /api/incidents/:id/analysis` |
 | `POST /api/v1/incidents/:id/resolve` | `incidents:write` | `POST /api/incidents/:id/resolve` |
 
 Query parameters, bodies and responses are exactly those of the dashboard route in the last column.
@@ -1403,6 +1462,9 @@ names the key — `API key “Terraform”` — as well as the person who issued
 | `MONITOR_DISABLED`              | 409            | Monitor must be on before it can be run                |
 | `INCIDENT_NOT_FOUND`            | 404            | No such incident, or not yours                         |
 | `INCIDENT_ALREADY_RESOLVED`     | 409            | Incident is already closed                             |
+| `INCIDENT_NOT_RESOLVED`         | 409            | Only a resolved incident can be analysed               |
+| `INCIDENT_ANALYSIS_NOT_FOUND`   | 404            | The incident has not been analysed                     |
+| `AI_NOT_CONFIGURED`             | 503            | This deployment has no AI provider configured          |
 | `NOTIFICATION_NOT_FOUND`        | 404            | No such notification                                   |
 | `CHANNEL_NOT_FOUND`             | 404            | No such channel, or not yours                          |
 | `CHANNEL_NAME_TAKEN`            | 409            | A channel with that name already exists                |

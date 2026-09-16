@@ -34,6 +34,11 @@ export const ApiResponse = {
     return response.status(201).json({ success: true, data } satisfies ApiSuccessResponse<TData>);
   },
 
+  /** 202 for work that was queued rather than done: the payload describes where it stands. */
+  accepted<TData>(response: Response, data: TData): Response {
+    return response.status(202).json({ success: true, data } satisfies ApiSuccessResponse<TData>);
+  },
+
   /**
    * 204 with no body at all.
    *

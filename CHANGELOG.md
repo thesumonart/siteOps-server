@@ -13,6 +13,26 @@ deployed together.
 
 ### Added
 
+- **AI incident analysis.** When an outage or response-time slowdown ends, SiteOps writes a
+  post-incident summary — Summary, Timeline, Impact, Likely cause, Recommended follow-up — from the
+  incident, the checks around it (collapsed into a timeline, with response-time statistics before,
+  during and after), status codes, errors, anomaly z-scores and recent history.
+  - Anthropic (`claude-opus-5` by default) or OpenAI (`gpt-5`), called over their REST APIs.
+    Optional: without `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` nothing is queued or sent, and requests
+    answer `AI_NOT_CONFIGURED`.
+  - Queued automatically on resolution, after `AI_ANALYSIS_DELAY_SECONDS`, for incidents of at
+    least `AI_ANALYSIS_MIN_DURATION_SECONDS`; written by a new worker loop with retries and backoff.
+    Stored on the incident.
+  - `GET /api/incidents/:id/analysis` and `GET /api/v1/incidents/:id/analysis` read it;
+    `POST /api/incidents/:id/analysis` queues one on demand. `IncidentDto` gains
+    `analysis: { status, generatedAt } | null`.
+  - Each generation is reserved atomically from the plan's `aiGenerationsPerMonth` in the new
+    `ai_usage` collection before the provider is called, and returned if it fails. Generations are
+    audited as `ai.analysis_generated`.
+  - Only the website's hostname is sent, never its path or query; error text is clipped and fenced
+    so it cannot pose as instructions.
+  - The `ai_insights` plan feature is released; no plan feature is still unreleased. One new
+    collection and one new incident index need `pnpm indexes:sync`.
 - **Public status pages and custom domains.** An organization publishes a chosen set of its websites
   at `/api/public/status-pages/:slug`: each component's status, daily uptime over 30, 60 or 90 days,
   and open outages and slowdowns. Websites appear under a display name, and nothing that identifies

@@ -203,6 +203,44 @@ export const envSchema = z
      */
     CHANNEL_DELIVERY_RETRY_BASE_SECONDS: z.coerce.number().int().min(1).max(3_600).default(30),
 
+    /* --- AI incident analysis --------------------------------------------
+     *
+     * All optional. With no provider key, nothing is queued and nothing is
+     * sent anywhere: the analysis endpoints answer AI_NOT_CONFIGURED and the
+     * dashboard says so. With one, a resolved outage or slowdown on a plan that
+     * includes ai_insights is summarised by the configured model a few minutes
+     * after it ends.
+     *
+     * The provider is inferred from whichever key is set, Anthropic first;
+     * AI_PROVIDER picks explicitly when both are.
+     */
+    AI_PROVIDER: z.enum(['anthropic', 'openai']).optional(),
+    ANTHROPIC_API_KEY: z.string().min(1).optional(),
+    OPENAI_API_KEY: z.string().min(1).optional(),
+    /** Overrides the provider's default model: claude-opus-5 or gpt-5. */
+    AI_MODEL: z.string().trim().min(1).max(100).optional(),
+    /** How long one generation may take before it counts as failed and is retried. */
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
+    /** Upper bound on one summary's length, in the provider's tokens. */
+    AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_000).default(1_500),
+    /**
+     * Wait after an incident resolves before analysing it, so the checks that
+     * confirm the recovery are part of what the model sees.
+     */
+    AI_ANALYSIS_DELAY_SECONDS: z.coerce.number().int().min(0).max(3_600).default(120),
+    /**
+     * Incidents shorter than this are not analysed automatically. A blip that
+     * cleared in a minute has little to explain, and each analysis counts
+     * against the plan's monthly allowance. A person can still ask for one.
+     */
+    AI_ANALYSIS_MIN_DURATION_SECONDS: z.coerce.number().int().min(0).max(86_400).default(120),
+    /** How often the worker looks for analyses that are due. */
+    AI_ANALYSIS_POLL_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(3_600).default(30),
+    /** Analyses written simultaneously. Each is one long request to the provider. */
+    AI_ANALYSIS_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
+    /** Attempts per analysis, including the first, before it is recorded as failed. */
+    AI_ANALYSIS_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(4),
+
     /* --- Response-time anomaly detection --------------------------------
      *
      * Each website keeps its last ANOMALY_WINDOW_SIZE successful response
@@ -343,6 +381,21 @@ export const envSchema = z
         path: ['ANOMALY_MIN_SAMPLES'],
         message:
           'ANOMALY_MIN_SAMPLES must not exceed ANOMALY_WINDOW_SIZE, or no baseline is ever formed.',
+      });
+    }
+    // A provider named without its key would look configured and send nothing.
+    if (value.AI_PROVIDER === 'anthropic' && !value.ANTHROPIC_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ANTHROPIC_API_KEY'],
+        message: 'ANTHROPIC_API_KEY is required when AI_PROVIDER is "anthropic".',
+      });
+    }
+    if (value.AI_PROVIDER === 'openai' && !value.OPENAI_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OPENAI_API_KEY'],
+        message: 'OPENAI_API_KEY is required when AI_PROVIDER is "openai".',
       });
     }
     if (value.NODE_ENV === 'production' && value.MONITOR_ALLOW_PRIVATE_ADDRESSES) {

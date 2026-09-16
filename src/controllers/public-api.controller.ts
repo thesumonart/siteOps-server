@@ -16,6 +16,7 @@ import {
   validatedQuery,
 } from '../middlewares/validate.middleware.js';
 import { ApiResponse } from '../responses/ApiResponse.js';
+import type { IncidentAnalysisService } from '../services/incident-analysis.service.js';
 import type { IncidentService } from '../services/incident.service.js';
 import type { MonitorService } from '../services/monitor.service.js';
 import type { ReportService } from '../services/report.service.js';
@@ -39,6 +40,7 @@ export class PublicApiController {
     private readonly monitors: MonitorService,
     private readonly incidents: IncidentService,
     private readonly reports: ReportService,
+    private readonly analyses: IncidentAnalysisService,
   ) {}
 
   listMonitors = async (request: Request, response: Response): Promise<void> => {
@@ -137,6 +139,11 @@ export class PublicApiController {
       response,
       await this.incidents.findById(currentOrganization(request), incidentId),
     );
+  };
+
+  getIncidentAnalysis = async (request: Request, response: Response): Promise<void> => {
+    const { incidentId } = validatedParams<{ incidentId: string }>(request);
+    ApiResponse.ok(response, await this.analyses.get(currentOrganization(request), incidentId));
   };
 
   resolveIncident = async (request: Request, response: Response): Promise<void> => {

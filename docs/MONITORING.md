@@ -328,6 +328,73 @@ screen shows next to its name. A failing channel is never switched off automatic
 **The plan is read per event.** A downgrade keeps an organization's channels, and stops queueing for
 the types its plan no longer includes.
 
+## AI incident analysis
+
+When an outage or a response-time slowdown ends, SiteOps can write a post-incident summary of it:
+what happened, a timeline, the likely impact and cause, and what to follow up on. It is optional
+and off unless a provider key is configured.
+
+### From resolution to summary
+
+1. **Queued on resolution.** The uptime job, after its alerts, and a person closing an incident by
+   hand both ask `IncidentAnalysisScheduler`. It queues only when a model is configured, the
+   organization's plan includes `ai_insights`, and the incident is an `availability` or
+   `anomaly` incident that lasted at least `AI_ANALYSIS_MIN_DURATION_SECONDS`. The last conditions
+   are part of the queuing write, so resolving twice queues once.
+2. **Delayed.** The analysis is due `AI_ANALYSIS_DELAY_SECONDS` after resolution, so the checks that
+   confirm the recovery are part of what the model sees.
+3. **Claimed.** A loop of its own — only on a deployment with a model — claims due analyses from the
+   incidents collection with the usual atomic lease. A generation takes tens of seconds on somebody
+   else's servers; sharing a loop would let it delay a check or an alert.
+4. **Gated, then reserved.** The job re-reads the incident and the plan, then _reserves_ one
+   generation from the month's allowance before calling the provider. The reservation is an atomic
+   conditional increment on `ai_usage`, so concurrent analyses cannot overspend it. A generation
+   that produces nothing gives it back.
+5. **Written.** The model gets structured facts, not raw rows (below), and its Markdown answer is
+   stored on the incident.
+
+### What the model sees
+
+Built by `src/ai/incident-facts.ts`, a pure module:
+
+- **The incident:** type, category, severity, start, end, duration, failed checks, last status code
+  and error, and whether it recovered or a person closed it.
+- **The website:** its name, its **hostname** — never the path or query, which can carry a token —
+  and its check interval.
+- **Checks around it:** up to an hour before, the incident itself, and fifteen minutes after.
+  Consecutive checks with the same outcome — status, status code, error type, anomalous or not —
+  collapse into one timeline segment, and response times become mean, p95 and maximum before,
+  during and after. A timeline of more than forty segments keeps twenty from each end. An incident
+  with more than 4,000 checks loads its first and last 2,000 and says how many were left out.
+- **Anomaly metrics:** anomalous checks and the highest z-score.
+- **Context:** other incidents on the website that overlapped, and how many incidents it had in the
+  last thirty days.
+
+Error text is clipped to 200 characters. The prompt tells the model to use only these facts, to label
+hypotheses as hypotheses, and that the data block never contains instructions — and the block is
+escaped so nothing inside it can close it. See `docs/SECURITY.md`.
+
+### Failures
+
+| Outcome                                         | Result                                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| Provider busy, rate limiting, 5xx, timeout      | Retried after 1 min, 4 min, 16 min…, or the provider's `Retry-After` if longer |
+| Bad key, unknown model, refused request (4xx)   | `failed` at once                                                               |
+| Attempts exhausted (`AI_ANALYSIS_MAX_ATTEMPTS`) | `failed`                                                                       |
+| Plan lost `ai_insights` while queued            | `skipped`, provider not called                                                 |
+| Monthly allowance used up                       | `skipped`, provider not called                                                 |
+| Incident reopened or deleted                    | `skipped`                                                                      |
+
+The stored reason names the provider's status and error type — "Anthropic answered HTTP 529
+(overloaded_error)" — never the provider's own message, which can describe the account.
+
+### Providers
+
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; with both, `AI_PROVIDER` chooses, otherwise Anthropic.
+The defaults are `claude-opus-5` and `gpt-5`; `AI_MODEL` overrides. Both are called over their REST
+APIs with `undici` — Messages and Chat Completions — for the reason Stripe is: two endpoints do not
+need two SDKs.
+
 ## Statistics
 
 Every number comes from checks the worker actually performed.
@@ -346,26 +413,36 @@ Every number comes from checks the worker actually performed.
 
 ## Configuration
 
-| Variable                                 | Default | What it controls                                          |
-| ---------------------------------------- | ------- | --------------------------------------------------------- |
-| `MONITOR_POLL_INTERVAL_SECONDS`          | 15      | How often the scheduler looks for due websites            |
-| `MONITOR_CONCURRENCY`                    | 10      | Websites checked simultaneously, and the claim batch size |
-| `MONITOR_MAX_REDIRECTS`                  | 5       | Hops followed before giving up                            |
-| `MONITOR_MAX_ATTEMPTS`                   | 2       | Attempts per scheduled check, including the first         |
-| `NOTIFICATION_MAX_ATTEMPTS`              | 3       | Delivery attempts per alert email                         |
-| `CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS` | 5       | Worst-case delay before a channel message leaves          |
-| `CHANNEL_DELIVERY_CONCURRENCY`           | 10      | Channel messages sent at once                             |
-| `CHANNEL_DELIVERY_TIMEOUT_MS`            | 10000   | One attempt's timeout                                     |
-| `CHANNEL_DELIVERY_MAX_ATTEMPTS`          | 5       | Attempts per channel message, including the first         |
-| `CHANNEL_DELIVERY_RETRY_BASE_SECONDS`    | 30      | First retry delay; each later one is four times longer    |
-| `ANOMALY_WINDOW_SIZE`                    | 100     | Successful response times in the rolling baseline         |
-| `ANOMALY_MIN_SAMPLES`                    | 30      | History needed before anything is scored                  |
-| `ANOMALY_Z_THRESHOLD`                    | 3       | Standard deviations above the mean that count as unusual  |
-| `ANOMALY_MIN_RATIO`                      | 1.5     | Multiple of the mean a response must also reach           |
-| `ANOMALY_TRIGGER_CHECKS`                 | 3       | Anomalous checks in a row before "degraded"               |
-| `ANOMALY_RECOVERY_CHECKS`                | 3       | Normal checks in a row before it clears                   |
-| `CHECK_RETENTION_DAYS`                   | 90      | Raw check retention; baked into the TTL index             |
-| `MONITOR_ALLOW_PRIVATE_ADDRESSES`        | false   | Test-only. Refused in production.                         |
+| Variable                                 | Default      | What it controls                                          |
+| ---------------------------------------- | ------------ | --------------------------------------------------------- |
+| `MONITOR_POLL_INTERVAL_SECONDS`          | 15           | How often the scheduler looks for due websites            |
+| `MONITOR_CONCURRENCY`                    | 10           | Websites checked simultaneously, and the claim batch size |
+| `MONITOR_MAX_REDIRECTS`                  | 5            | Hops followed before giving up                            |
+| `MONITOR_MAX_ATTEMPTS`                   | 2            | Attempts per scheduled check, including the first         |
+| `NOTIFICATION_MAX_ATTEMPTS`              | 3            | Delivery attempts per alert email                         |
+| `CHANNEL_DELIVERY_POLL_INTERVAL_SECONDS` | 5            | Worst-case delay before a channel message leaves          |
+| `CHANNEL_DELIVERY_CONCURRENCY`           | 10           | Channel messages sent at once                             |
+| `CHANNEL_DELIVERY_TIMEOUT_MS`            | 10000        | One attempt's timeout                                     |
+| `CHANNEL_DELIVERY_MAX_ATTEMPTS`          | 5            | Attempts per channel message, including the first         |
+| `CHANNEL_DELIVERY_RETRY_BASE_SECONDS`    | 30           | First retry delay; each later one is four times longer    |
+| `ANOMALY_WINDOW_SIZE`                    | 100          | Successful response times in the rolling baseline         |
+| `ANOMALY_MIN_SAMPLES`                    | 30           | History needed before anything is scored                  |
+| `ANOMALY_Z_THRESHOLD`                    | 3            | Standard deviations above the mean that count as unusual  |
+| `ANOMALY_MIN_RATIO`                      | 1.5          | Multiple of the mean a response must also reach           |
+| `ANOMALY_TRIGGER_CHECKS`                 | 3            | Anomalous checks in a row before "degraded"               |
+| `ANOMALY_RECOVERY_CHECKS`                | 3            | Normal checks in a row before it clears                   |
+| `CHECK_RETENTION_DAYS`                   | 90           | Raw check retention; baked into the TTL index             |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`   | unset        | Enables AI incident analysis                              |
+| `AI_PROVIDER`                            | inferred     | Which provider, when both keys are set                    |
+| `AI_MODEL`                               | per provider | `claude-opus-5` or `gpt-5`                                |
+| `AI_REQUEST_TIMEOUT_MS`                  | 60000        | One generation's timeout                                  |
+| `AI_MAX_OUTPUT_TOKENS`                   | 1500         | Upper bound on one summary                                |
+| `AI_ANALYSIS_DELAY_SECONDS`              | 120          | Wait after resolution before analysing                    |
+| `AI_ANALYSIS_MIN_DURATION_SECONDS`       | 120          | Shorter incidents are not analysed automatically          |
+| `AI_ANALYSIS_POLL_INTERVAL_SECONDS`      | 30           | How often due analyses are looked for                     |
+| `AI_ANALYSIS_CONCURRENCY`                | 2            | Analyses written at once                                  |
+| `AI_ANALYSIS_MAX_ATTEMPTS`               | 4            | Attempts per analysis, including the first                |
+| `MONITOR_ALLOW_PRIVATE_ADDRESSES`        | false        | Test-only. Refused in production.                         |
 
 No magic numbers: every monitoring parameter is an environment variable validated at startup.
 

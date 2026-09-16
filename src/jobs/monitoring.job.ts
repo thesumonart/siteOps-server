@@ -10,6 +10,7 @@ import {
   notifyWebsiteRecovered,
 } from '../monitoring/notification-processor.js';
 import type { PlanLookup } from '../monitoring/plan-lookup.js';
+import type { IncidentAnalysisScheduler } from '../services/incident-analysis-scheduler.js';
 import { processCheckResult } from '../monitoring/result-processor.js';
 import { releaseAndReschedule, type ClaimedWebsite } from '../queues/monitoring.queue.js';
 import type { NotificationRepository } from '../repositories/notification.repository.js';
@@ -32,6 +33,11 @@ export interface MonitoringJobDependencies {
   readonly channels: ChannelEventPublisher;
   /** Answers "does this organization's plan include anomaly detection" without a query per check. */
   readonly plans: PlanLookup;
+  /**
+   * Queues the AI analysis of an outage or slowdown that just ended. Absent
+   * where no model is configured — and in tests about everything else.
+   */
+  readonly analyses?: IncidentAnalysisScheduler;
 }
 
 /**
@@ -138,6 +144,19 @@ export async function runMonitoringJob(
           .websiteDegradationResolved(website, restoredId)
           .catch(logFailure('channel.degradation_resolved_publish_failed')),
       ]);
+    }
+
+    // Last, and after every alert: a summary is useful minutes from now, the
+    // alerts are useful immediately.
+    const analyses = dependencies.analyses;
+    const ended = [resolvedId, restoredId].filter((id) => id !== null);
+    if (analyses?.enabled && ended.length > 0) {
+      const plan = await dependencies.plans.planOf(website.organizationId);
+      for (const incidentId of ended) {
+        await analyses
+          .afterResolution(incidentId, plan)
+          .catch(logFailure('incident_analysis.enqueue_failed'));
+      }
     }
   } catch (error) {
     logger.error(

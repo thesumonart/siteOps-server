@@ -1,18 +1,53 @@
 import {
+  AI_PROVIDERS,
   CHECK_ERROR_TYPES,
+  INCIDENT_ANALYSIS_STATUSES,
   INCIDENT_CATEGORIES,
   INCIDENT_SEVERITIES,
   INCIDENT_STATUSES,
   INCIDENT_TYPES,
+  MAX_ANALYSIS_SUMMARY_LENGTH,
 } from '../contracts/index.js';
 import type {
+  AiProvider,
   CheckErrorType,
+  IncidentAnalysisStatus,
   IncidentCategory,
   IncidentSeverity,
   IncidentStatus,
   IncidentType,
 } from '../contracts/index.js';
 import mongoose, { Schema, model, type HydratedDocument, type Model, type Types } from 'mongoose';
+
+/**
+ * The AI-written summary of a resolved incident, and the queue state that
+ * produces it.
+ *
+ * Embedded rather than a collection of its own because an incident has at most
+ * one, it is read with the incident, and its lifecycle is the incident's. The
+ * incidents collection is also the queue: `status: 'pending'` with a due
+ * `nextAttemptAt` is claimable, through the same lease mechanism as every other
+ * queue in SiteOps — see `queues/incident-analysis.queue.ts`.
+ */
+export interface IncidentAnalysis {
+  status: IncidentAnalysisStatus;
+  requestedAt: Date;
+  /** Null when queued automatically on resolution. */
+  requestedByUserId: Types.ObjectId | null;
+  requestedByName: string | null;
+  /** Counted when claimed, so a generation that crashes the process still uses one up. */
+  attempts: number;
+  nextAttemptAt: Date | null;
+  leaseExpiresAt: Date | null;
+  /** The last completed summary. Kept while a regeneration is pending. */
+  summary: string | null;
+  provider: AiProvider | null;
+  model: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  generatedAt: Date | null;
+  failureReason: string | null;
+}
 
 export interface IncidentAttributes {
   organizationId: Types.ObjectId;
@@ -45,11 +80,32 @@ export interface IncidentAttributes {
   downNotifiedAt: Date | null;
   recoveryNotifiedAt: Date | null;
   resolvedByUserId: Types.ObjectId | null;
+  analysis: IncidentAnalysis | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export type IncidentDocument = HydratedDocument<IncidentAttributes>;
+
+const analysisSchema = new Schema<IncidentAnalysis>(
+  {
+    status: { type: String, required: true, enum: INCIDENT_ANALYSIS_STATUSES },
+    requestedAt: { type: Date, required: true },
+    requestedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    requestedByName: { type: String, default: null, maxlength: 200 },
+    attempts: { type: Number, required: true, default: 0, min: 0 },
+    nextAttemptAt: { type: Date, default: null },
+    leaseExpiresAt: { type: Date, default: null },
+    summary: { type: String, default: null, maxlength: MAX_ANALYSIS_SUMMARY_LENGTH },
+    provider: { type: String, enum: [...AI_PROVIDERS, null], default: null },
+    model: { type: String, default: null, maxlength: 100 },
+    inputTokens: { type: Number, default: null, min: 0 },
+    outputTokens: { type: Number, default: null, min: 0 },
+    generatedAt: { type: Date, default: null },
+    failureReason: { type: String, default: null, maxlength: 500 },
+  },
+  { _id: false },
+);
 
 const incidentSchema = new Schema<IncidentAttributes>(
   {
@@ -75,6 +131,7 @@ const incidentSchema = new Schema<IncidentAttributes>(
     downNotifiedAt: { type: Date, default: null },
     recoveryNotifiedAt: { type: Date, default: null },
     resolvedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    analysis: { type: analysisSchema, default: null },
   },
   { timestamps: true, collection: 'incidents' },
 );
@@ -129,6 +186,21 @@ incidentSchema.index(
 incidentSchema.index(
   { organizationId: 1, status: 1, startedAt: -1, _id: -1 },
   { name: 'incident_org_status_started_at' },
+);
+
+/*
+ * The analysis queue's claim.
+ *
+ * Partial on pending, so the index holds only work waiting to be done — a
+ * handful of documents — rather than every incident ever resolved, and the
+ * claim sorted on `nextAttemptAt` never scans a finished one.
+ */
+incidentSchema.index(
+  { 'analysis.nextAttemptAt': 1 },
+  {
+    name: 'incident_analysis_queue',
+    partialFilterExpression: { 'analysis.status': 'pending' },
+  },
 );
 
 // Backs the incident history shown on a website's detail page.

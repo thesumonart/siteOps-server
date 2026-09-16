@@ -34,6 +34,7 @@ export function publicApiRoutes(dependencies: ApiDependencies): Router {
     dependencies.monitorService,
     dependencies.incidentService,
     dependencies.reportService,
+    dependencies.incidentAnalysisService,
   );
 
   router.use(
@@ -116,6 +117,12 @@ export function publicApiRoutes(dependencies: ApiDependencies): Router {
     requireScope('incidents:read'),
     validate(incidentValidators.getById),
     asyncHandler(api.getIncident),
+  );
+  router.get(
+    '/incidents/:incidentId/analysis',
+    requireScope('incidents:read'),
+    validate(incidentValidators.getById),
+    asyncHandler(api.getIncidentAnalysis),
   );
   router.post(
     '/incidents/:incidentId/resolve',

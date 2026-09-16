@@ -67,6 +67,7 @@ src/errors/         ApiError, global handler
 src/responses/      The envelope
 src/billing/        Payment provider interface, Stripe adapter, price catalogue
 src/integrations/   Slack, Discord and webhook rendering, signing and the guarded POST
+src/ai/             Model providers, and the facts and prompt for incident analysis
 src/monitoring/     SSRF guards, checker, incident rules
 src/queues/         The MongoDB-backed work queue
 src/jobs/           Scheduler loops, per-website job, the monitoring runtime

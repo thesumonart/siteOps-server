@@ -27,6 +27,7 @@ end-to-end suite cleans up by addressing them directly. They are not renamed cas
 | `channel_deliveries`    | `channel-delivery.model.ts`      | app        | One event owed to one channel. Also a queue.      |
 | `api_keys`              | `api-key.model.ts`               | app        | Public API keys, by hash.                         |
 | `api_usage`             | `api-usage.model.ts`             | app        | Public API requests per organization per UTC day. |
+| `ai_usage`              | `ai-usage.model.ts`              | app        | AI generations per organization per UTC month.    |
 | `status_pages`          | `status-page.model.ts`           | app        | Public status pages and their custom domains.     |
 | `audit_logs`            | `audit-log.model.ts`             | app        | Who changed what.                                 |
 | `billing_events`        | `billing-event.model.ts`         | app        | Provider webhook ids already applied.             |
@@ -116,13 +117,18 @@ never indexed, read only with the rest of a history page.
 
 ### `incidents`
 
-| Index                                    | Keys                                                          | Why                                                                                                                                                                                                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `incident_one_open_per_website_category` | `{ websiteId, category }` unique, partial on `status: 'open'` | **At most one open incident per website per category.** The deduplication guarantee, enforced by the database rather than by application bookkeeping. Keyed on the category so an expiring certificate and an outage can be open together, while two outages still cannot. |
-| `incident_org_started_at`                | `{ organizationId, startedAt: -1, _id: -1 }`                  | The incident list, newest first.                                                                                                                                                                                                                                           |
-| `incident_org_category_started_at`       | `{ organizationId, category, startedAt: -1, _id: -1 }`        | The category filter on that list.                                                                                                                                                                                                                                          |
-| `incident_org_status_started_at`         | `{ organizationId, status, startedAt: -1, _id: -1 }`          | The open-incident counter and the status filter.                                                                                                                                                                                                                           |
-| `incident_website_started_at`            | `{ websiteId, startedAt: -1, _id: -1 }`                       | Incident history on a website's page.                                                                                                                                                                                                                                      |
+| Index                                    | Keys                                                                  | Why                                                                                                                                                                                                                                                                        |
+| ---------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `incident_one_open_per_website_category` | `{ websiteId, category }` unique, partial on `status: 'open'`         | **At most one open incident per website per category.** The deduplication guarantee, enforced by the database rather than by application bookkeeping. Keyed on the category so an expiring certificate and an outage can be open together, while two outages still cannot. |
+| `incident_org_started_at`                | `{ organizationId, startedAt: -1, _id: -1 }`                          | The incident list, newest first.                                                                                                                                                                                                                                           |
+| `incident_org_category_started_at`       | `{ organizationId, category, startedAt: -1, _id: -1 }`                | The category filter on that list.                                                                                                                                                                                                                                          |
+| `incident_org_status_started_at`         | `{ organizationId, status, startedAt: -1, _id: -1 }`                  | The open-incident counter and the status filter.                                                                                                                                                                                                                           |
+| `incident_website_started_at`            | `{ websiteId, startedAt: -1, _id: -1 }`                               | Incident history on a website's page.                                                                                                                                                                                                                                      |
+| `incident_analysis_queue`                | `{ analysis.nextAttemptAt }`, partial on `analysis.status: 'pending'` | The AI analysis queue's claim. Partial, so it holds only waiting work rather than every incident ever resolved.                                                                                                                                                            |
+
+An incident's AI analysis is an embedded `analysis` document — status, the summary, the model that
+wrote it, and the lease fields that make the incidents collection its own queue. It is null until
+one is queued. Incident lists project the summary out.
 
 ### `website_monitors`
 
@@ -273,6 +279,18 @@ collection of its own, because a page has at most one.
 The public page's daily history reads `website_checks` through `check_website_status_checked_at`,
 which holds every field the grouping touches, so the aggregation is answered from the index alone.
 Open incidents are read through `incident_org_status_started_at`.
+
+### `ai_usage`
+
+One counter per organization per UTC month. The plan's `aiGenerationsPerMonth` limits something
+that costs money per call, so a generation is reserved here — a conditional increment that only
+matches a counter under the limit — before the provider is called, and given back if it produces
+nothing.
+
+| Index                       | Keys                               | Why                                                                          |
+| --------------------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
+| `ai_usage_org_month_unique` | `{ organizationId, month }` unique | The counter's key. Two first generations of a month cannot start two counts. |
+| `ai_usage_ttl`              | `{ monthStart: 1 }`, 400 days      | Retention: a year of history, then dropped.                                  |
 
 ### `audit_logs`
 

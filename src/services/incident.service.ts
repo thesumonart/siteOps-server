@@ -8,12 +8,15 @@ import type { OrganizationContext } from '../types/common.types.js';
 import { decodeOptionalCursor, encodeCursor } from '../utils/pagination.js';
 import { toObjectId } from '../utils/object-id.js';
 import type { AuditService } from './audit.service.js';
+import type { IncidentAnalysisService } from './incident-analysis.service.js';
 
 export class IncidentService {
   constructor(
     private readonly repository: IncidentRepository,
     private readonly websites: WebsiteRepository,
     private readonly audit: AuditService,
+    /** Queues the automatic analysis when a person closes an incident. */
+    private readonly analyses?: IncidentAnalysisService,
   ) {}
 
   async findHistory(
@@ -115,6 +118,8 @@ export class IncidentService {
       targetLabel: labels.get(resolved.websiteId.toHexString())?.name,
     });
 
+    await this.analyses?.afterManualResolution(organization, resolved);
+
     return toIncidentDto(resolved, labels.get(resolved.websiteId.toHexString()));
   }
 
@@ -165,5 +170,11 @@ export function toIncidentDto(incident: IncidentRecord, website?: WebsiteLabel):
     lastStatusCode: incident.lastStatusCode,
     lastErrorType: incident.lastErrorType,
     lastErrorMessage: incident.lastErrorMessage,
+    analysis: incident.analysis
+      ? {
+          status: incident.analysis.status,
+          generatedAt: incident.analysis.generatedAt?.toISOString() ?? null,
+        }
+      : null,
   };
 }

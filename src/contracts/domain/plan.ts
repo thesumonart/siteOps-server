@@ -85,7 +85,7 @@ export const PLAN_FEATURE_LABELS: Record<PlanFeature, string> = {
  * shipped feature listed here is understated, which is a smaller failure than
  * the reverse but still a failure.
  */
-export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = ['ai_insights'];
+export const UNRELEASED_PLAN_FEATURES: readonly PlanFeature[] = [];
 
 export function isFeatureAvailable(feature: PlanFeature): boolean {
   return !UNRELEASED_PLAN_FEATURES.includes(feature);
