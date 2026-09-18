@@ -315,6 +315,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     entitlementService,
     brandingService,
     auditService,
+    websiteRepository,
   );
 
   const dependencies: ApiDependencies = {

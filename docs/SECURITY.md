@@ -530,6 +530,14 @@ website-scoped data applies it, so "read websites" means "read this client's web
 belonging to another client of the same agency does not resolve at all — a 404, not a 403, exactly
 like a cross-tenant request.
 
+The scope covers everything _about_ a website, not only websites themselves. Incidents, a website's
+stats, uptime and checks, the overview cards, the monitor summary and monitor results, and reports
+all narrow to the websites the membership can see (`WebsiteRepository.idsVisibleTo`). A report is
+visible to a client only when every website it covers is theirs, so an organization-wide report — or
+one mixing two clients — never is. These reads once used the organization alone, which let a contact
+list every outage in the agency, take a website id from it and read that website's checks;
+`tests/integration/client.test.ts` now asserts each path from a contact's session.
+
 A `client` membership with no `clientId` would be a contact scoped to nothing, which must not read
 as "everything". The service refuses to create one and the middleware refuses to _use_ one, so a row
 written by anything other than the API still fails closed.

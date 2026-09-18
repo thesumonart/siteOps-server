@@ -193,7 +193,9 @@ export class MonitorConfigService {
     query: ListMonitorResultsQuery,
   ): Promise<CursorPaginatedResult<MonitorResultDto>> {
     const monitor = await this.repository.findById(organization.objectId, monitorId);
-    if (!monitor) {
+    // Another client's monitor reads exactly like one that does not exist.
+    const visible = await this.websites.visibleWebsiteIds(organization);
+    if (!monitor || (visible && !visible.some((id) => id.equals(monitor.websiteId)))) {
       throw ApiError.notFound('MONITOR_NOT_FOUND', 'That monitor is not configured.');
     }
 
@@ -221,7 +223,10 @@ export class MonitorConfigService {
 
   /** Enabled monitors grouped by type and status, for the overview cards. */
   async summary(organization: OrganizationContext): Promise<readonly MonitorSummaryDto[]> {
-    const counts = await this.repository.countByTypeAndStatus(organization.objectId);
+    const counts = await this.repository.countByTypeAndStatus(
+      organization.objectId,
+      await this.websites.visibleWebsiteIds(organization),
+    );
 
     return MONITOR_TYPES.map((type) => {
       const forType = counts.filter((count) => count.type === type);

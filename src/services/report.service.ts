@@ -135,12 +135,17 @@ export class ReportService {
    */
   async dashboardStats(organization: OrganizationContext): Promise<DashboardStatsDto> {
     const since = windowStart('24h', new Date());
+    // A client membership's overview is of its own websites. Every figure below
+    // is narrowed the same way, or the cards would disagree with each other —
+    // and the agency's totals would leak to every portal contact.
+    const scope = organization.clientScope;
+    const visible = await this.websites.idsVisibleTo(organization.objectId, scope);
 
     const [byStatus, totalsByWebsite, openIncidents, freshness] = await Promise.all([
-      this.websites.countByStatus(organization.objectId),
-      this.checks.totalsByWebsite(organization.objectId, since),
-      this.incidents.countOpen(organization.objectId),
-      this.websites.monitoringFreshness(organization.objectId),
+      this.websites.countByStatus(organization.objectId, scope),
+      this.checks.totalsByWebsite(organization.objectId, since, visible),
+      this.incidents.countOpen(organization.objectId, visible),
+      this.websites.monitoringFreshness(organization.objectId, scope),
     ]);
 
     const combined = combineTotals([...totalsByWebsite.values()]);
@@ -169,12 +174,19 @@ export class ReportService {
     };
   }
 
-  /** Resolves a website within the tenant, or 404s. Every read here starts with this. */
+  /**
+   * Resolves a website within the tenant — and, for a client membership, within
+   * the client — or 404s. Every read here starts with this.
+   */
   private async requireWebsite(
     organization: OrganizationContext,
     websiteId: string,
   ): Promise<WebsiteRecord> {
-    const website = await this.websites.findById(organization.objectId, websiteId);
+    const website = await this.websites.findById(
+      organization.objectId,
+      websiteId,
+      organization.clientScope,
+    );
     if (!website) {
       throw ApiError.notFound('WEBSITE_NOT_FOUND', 'Website not found.');
     }

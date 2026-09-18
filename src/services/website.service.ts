@@ -322,6 +322,13 @@ export class WebsiteService {
    * same agency does not resolve, which is the whole of the portal's isolation
    * guarantee.
    */
+  /** See `WebsiteRepository.idsVisibleTo`. */
+  async visibleWebsiteIds(
+    organization: OrganizationContext,
+  ): Promise<readonly Types.ObjectId[] | null> {
+    return this.repository.idsVisibleTo(organization.objectId, organization.clientScope);
+  }
+
   async requireWebsite(
     organization: OrganizationContext,
     websiteId: string,

@@ -202,12 +202,16 @@ export class MonitorRepository {
    */
   async countByTypeAndStatus(
     organizationId: Types.ObjectId,
+    visibleWebsiteIds: readonly Types.ObjectId[] | null = null,
   ): Promise<readonly MonitorStatusCount[]> {
+    const match: Record<string, unknown> = { organizationId, enabled: true };
+    if (visibleWebsiteIds) match.websiteId = { $in: visibleWebsiteIds };
+
     const rows = await WebsiteMonitorModel.aggregate<{
       _id: { type: MonitorType; status: MonitorStatus };
       count: number;
     }>([
-      { $match: { organizationId, enabled: true } },
+      { $match: match },
       { $group: { _id: { type: '$type', status: '$status' }, count: { $sum: 1 } } },
     ]).exec();
 

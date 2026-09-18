@@ -16,6 +16,11 @@ export interface ListIncidentsFilter {
   readonly category?: IncidentCategory | undefined;
   readonly websiteId?: string | undefined;
   readonly cursor?: DecodedCursor | undefined;
+  /**
+   * The websites the caller may see, or null for all of them. Part of the
+   * tenant boundary for a client membership, not a filter a caller chooses.
+   */
+  readonly visibleWebsiteIds?: readonly Types.ObjectId[] | null | undefined;
 }
 
 /**
@@ -41,12 +46,17 @@ export class IncidentRepository {
     if (filter.status) query.status = filter.status;
     if (filter.category) query.category = filter.category;
 
+    const visible = filter.visibleWebsiteIds ?? null;
+
     if (filter.websiteId) {
       const websiteObjectId = toObjectId(filter.websiteId);
       // An unparseable id is not an error: it simply matches nothing, the same
-      // as an id for a website in another organization.
+      // as an id for a website in another organization — or another client.
       if (!websiteObjectId) return [];
+      if (visible && !visible.some((id) => id.equals(websiteObjectId))) return [];
       query.websiteId = websiteObjectId;
+    } else if (visible) {
+      query.websiteId = { $in: visible };
     }
 
     if (filter.cursor) {
@@ -70,11 +80,16 @@ export class IncidentRepository {
   async findById(
     organizationId: Types.ObjectId,
     incidentId: string,
+    visibleWebsiteIds: readonly Types.ObjectId[] | null = null,
   ): Promise<IncidentRecord | null> {
     const incidentObjectId = toObjectId(incidentId);
     if (!incidentObjectId) return null;
 
-    return IncidentModel.findOne({ _id: incidentObjectId, organizationId })
+    return IncidentModel.findOne({
+      _id: incidentObjectId,
+      organizationId,
+      ...(visibleWebsiteIds ? { websiteId: { $in: visibleWebsiteIds } } : {}),
+    })
       .lean<IncidentRecord>()
       .exec();
   }
@@ -118,8 +133,15 @@ export class IncidentRepository {
       .exec();
   }
 
-  async countOpen(organizationId: Types.ObjectId): Promise<number> {
-    return IncidentModel.countDocuments({ organizationId, status: 'open' }).exec();
+  async countOpen(
+    organizationId: Types.ObjectId,
+    visibleWebsiteIds: readonly Types.ObjectId[] | null = null,
+  ): Promise<number> {
+    return IncidentModel.countDocuments({
+      organizationId,
+      status: 'open',
+      ...(visibleWebsiteIds ? { websiteId: { $in: visibleWebsiteIds } } : {}),
+    }).exec();
   }
 
   /**

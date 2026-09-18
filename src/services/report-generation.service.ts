@@ -17,6 +17,7 @@ import type {
   ReportRepository,
   ReportScheduleRecord,
 } from '../repositories/report.repository.js';
+import type { WebsiteRepository } from '../repositories/website.repository.js';
 import { renderReport, type RenderedReport } from '../reporting/renderers/index.js';
 import type { Actor } from '../types/auth.types.js';
 import type { OrganizationContext } from '../types/common.types.js';
@@ -45,6 +46,8 @@ export class ReportGenerationService {
     private readonly entitlements: EntitlementService,
     private readonly branding: BrandingService,
     private readonly audit: AuditService,
+    /** Narrows what a client membership can read to its own websites' reports. */
+    private readonly websites: WebsiteRepository,
   ) {}
 
   /**
@@ -100,6 +103,10 @@ export class ReportGenerationService {
 
     const rows = await this.repository.list({
       organizationId: organization.objectId,
+      visibleWebsiteIds: await this.websites.idsVisibleTo(
+        organization.objectId,
+        organization.clientScope,
+      ),
       pageSize: query.pageSize,
       status: query.status,
       type: query.type,
@@ -309,7 +316,11 @@ export class ReportGenerationService {
     organization: OrganizationContext,
     reportId: string,
   ): Promise<ReportRecord> {
-    const report = await this.repository.findById(organization.objectId, reportId);
+    const report = await this.repository.findById(
+      organization.objectId,
+      reportId,
+      await this.websites.idsVisibleTo(organization.objectId, organization.clientScope),
+    );
     if (!report) throw ApiError.notFound('REPORT_NOT_FOUND', 'Report not found.');
     return report;
   }

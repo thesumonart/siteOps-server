@@ -69,8 +69,13 @@ export class ReportRepository {
     readonly status?: ReportStatus | undefined;
     readonly type?: ReportType | undefined;
     readonly cursor?: DecodedCursor | undefined;
+    /** The websites the caller may see, or null for all of them. */
+    readonly visibleWebsiteIds?: readonly Types.ObjectId[] | null | undefined;
   }): Promise<readonly ReportRecord[]> {
-    const query: Record<string, unknown> = { organizationId: filter.organizationId };
+    const query: Record<string, unknown> = {
+      organizationId: filter.organizationId,
+      ...visibleReportsFilter(filter.visibleWebsiteIds ?? null),
+    };
     if (filter.status) query.status = filter.status;
     if (filter.type) query.type = filter.type;
     if (filter.cursor) Object.assign(query, cursorFilter('createdAt', filter.cursor));
@@ -88,11 +93,21 @@ export class ReportRepository {
     );
   }
 
-  async findById(organizationId: Types.ObjectId, reportId: string): Promise<ReportRecord | null> {
+  async findById(
+    organizationId: Types.ObjectId,
+    reportId: string,
+    visibleWebsiteIds: readonly Types.ObjectId[] | null = null,
+  ): Promise<ReportRecord | null> {
     const reportObjectId = toObjectId(reportId);
     if (!reportObjectId) return null;
 
-    return ReportModel.findOne({ _id: reportObjectId, organizationId }).lean<ReportRecord>().exec();
+    return ReportModel.findOne({
+      _id: reportObjectId,
+      organizationId,
+      ...visibleReportsFilter(visibleWebsiteIds),
+    })
+      .lean<ReportRecord>()
+      .exec();
   }
 
   async delete(organizationId: Types.ObjectId, reportId: string): Promise<ReportRecord | null> {
@@ -318,4 +333,22 @@ export class ReportRepository {
       ).exec(),
     ]);
   }
+}
+
+/**
+ * The reports a caller limited to `visibleWebsiteIds` may read: those covering
+ * at least one website, all of them visible.
+ *
+ * An organization-wide report — no websites listed — covers the whole agency,
+ * so a client membership never sees one, and neither does it see a report that
+ * mixes its websites with another client's.
+ */
+function visibleReportsFilter(
+  visibleWebsiteIds: readonly Types.ObjectId[] | null,
+): Record<string, unknown> {
+  if (!visibleWebsiteIds) return {};
+  return {
+    'websiteIds.0': { $exists: true },
+    websiteIds: { $not: { $elemMatch: { $nin: visibleWebsiteIds } } },
+  };
 }

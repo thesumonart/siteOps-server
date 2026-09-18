@@ -3,10 +3,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type {
   ClientDto,
+  CursorPaginatedResult,
+  DashboardStatsDto,
+  IncidentDto,
+  MonitorSummaryDto,
   OffsetPaginatedResult,
+  ReportDto,
   WebsiteSummaryDto,
 } from '../../src/contracts/index.js';
-import { OrganizationMemberModel } from '../../src/models/index.js';
+import {
+  IncidentModel,
+  OrganizationMemberModel,
+  ReportModel,
+  WebsiteMonitorModel,
+} from '../../src/models/index.js';
 import { client, onboard, signUpAndVerify, type SignedInAccount } from '../support/api.js';
 import { databaseAvailable, disconnectTestDatabase } from '../support/test-db.js';
 
@@ -320,6 +330,158 @@ describe.skipIf(!available)('the client portal', () => {
       .get('/api/incidents')
       .set('X-Organization-Id', agency.organizationId)
       .expect(200);
+  });
+});
+
+/**
+ * Everything a client contact can reach that is not a website itself.
+ *
+ * Websites were always narrowed to the contact's client. Incidents, website
+ * statistics, the overview, monitors and reports were not — each read the whole
+ * organization — so a contact could list every outage in the agency, take a
+ * website id from it, and read that website's checks. Each case below is one of
+ * those paths, asserted from the contact's own session.
+ */
+describe.skipIf(!available)('what a client contact can read', () => {
+  let acmeIncidentId = '';
+  let globexIncidentId = '';
+  let acmeMonitorId = '';
+  let globexMonitorId = '';
+  const reportIds = { acme: '', globex: '', agencyWide: '', mixed: '' };
+
+  function asAcme(path: string) {
+    return acmeContact.agent.get(path).set('X-Organization-Id', agency.organizationId);
+  }
+
+  beforeAll(async () => {
+    if (!available) return;
+    const organizationId = new Types.ObjectId(agency.organizationId);
+
+    const openIncident = async (websiteId: string): Promise<string> => {
+      const created = await IncidentModel.create({
+        organizationId,
+        websiteId: new Types.ObjectId(websiteId),
+        status: 'open',
+        type: 'downtime',
+        category: 'availability',
+        startedAt: new Date(),
+        failedCheckCount: 3,
+      });
+      return created._id.toHexString();
+    };
+    acmeIncidentId = await openIncident(acmeWebsiteId);
+    globexIncidentId = await openIncident(globexWebsiteId);
+    await openIncident(unassignedWebsiteId);
+
+    const sslMonitor = async (websiteId: string, status: 'passing' | 'failing') => {
+      const created = await WebsiteMonitorModel.create({
+        organizationId,
+        websiteId: new Types.ObjectId(websiteId),
+        type: 'ssl',
+        enabled: true,
+        intervalSeconds: 86_400,
+        status,
+        config: { type: 'ssl', warningDays: 14 },
+      });
+      return created._id.toHexString();
+    };
+    acmeMonitorId = await sslMonitor(acmeWebsiteId, 'passing');
+    globexMonitorId = await sslMonitor(globexWebsiteId, 'failing');
+
+    const report = async (title: string, websiteIds: readonly string[]): Promise<string> => {
+      const created = await ReportModel.create({
+        organizationId,
+        type: websiteIds.length === 1 ? 'website' : 'organization',
+        title,
+        status: 'ready',
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+        websiteIds: websiteIds.map((id) => new Types.ObjectId(id)),
+      });
+      return created._id.toHexString();
+    };
+    reportIds.acme = await report('Acme August', [acmeWebsiteId]);
+    reportIds.globex = await report('Globex August', [globexWebsiteId]);
+    reportIds.agencyWide = await report('Agency August', []);
+    reportIds.mixed = await report('Acme and Globex', [acmeWebsiteId, globexWebsiteId]);
+  });
+
+  it('lists only incidents on its own websites', async () => {
+    const response = await asAcme('/api/incidents?pageSize=100').expect(200);
+    const items = (response.body as Envelope<CursorPaginatedResult<IncidentDto>>).data.items;
+
+    expect(items.map((incident) => incident.id)).toContain(acmeIncidentId);
+    expect(items.every((incident) => incident.websiteId === acmeWebsiteId)).toBe(true);
+  });
+
+  it("cannot filter its way into another client's incidents", async () => {
+    const response = await asAcme(`/api/incidents?websiteId=${globexWebsiteId}`).expect(200);
+    expect((response.body as Envelope<CursorPaginatedResult<IncidentDto>>).data.items).toEqual([]);
+  });
+
+  it("reads another client's incident as not found", async () => {
+    await asAcme(`/api/incidents/${acmeIncidentId}`).expect(200);
+    const response = await asAcme(`/api/incidents/${globexIncidentId}`).expect(404);
+    expect((response.body as { error: { code: string } }).error.code).toBe('INCIDENT_NOT_FOUND');
+  });
+
+  it("reads another client's website statistics as not found", async () => {
+    for (const path of ['stats?range=24h', 'uptime?range=24h', 'checks']) {
+      await asAcme(`/api/websites/${acmeWebsiteId}/${path}`).expect(200);
+      await asAcme(`/api/websites/${globexWebsiteId}/${path}`).expect(404);
+      await asAcme(`/api/websites/${unassignedWebsiteId}/${path}`).expect(404);
+    }
+  });
+
+  it("sees the overview of its own websites, not the agency's", async () => {
+    const contact = await asAcme('/api/dashboard/stats').expect(200);
+    expect((contact.body as Envelope<DashboardStatsDto>).data).toMatchObject({
+      totalWebsites: 1,
+      openIncidents: 1,
+    });
+
+    // The agency's own view is unchanged.
+    const agencyView = await agency.agent
+      .get('/api/dashboard/stats')
+      .set('X-Organization-Id', agency.organizationId)
+      .expect(200);
+    expect((agencyView.body as Envelope<DashboardStatsDto>).data.openIncidents).toBe(3);
+  });
+
+  it('sees monitors, and their results, for its own websites only', async () => {
+    const summary = await asAcme('/api/monitors/summary').expect(200);
+    const ssl = (summary.body as Envelope<{ items: readonly MonitorSummaryDto[] }>).data.items.find(
+      (entry) => entry.type === 'ssl',
+    );
+    expect(ssl).toMatchObject({ passing: 1, failing: 0 });
+
+    await asAcme(`/api/monitors/${acmeMonitorId}/results`).expect(200);
+    const refused = await asAcme(`/api/monitors/${globexMonitorId}/results`).expect(404);
+    expect((refused.body as { error: { code: string } }).error.code).toBe('MONITOR_NOT_FOUND');
+  });
+
+  it('reads only reports that cover nothing but its own websites', async () => {
+    const list = await asAcme('/api/reports?pageSize=100').expect(200);
+    const titles = (list.body as Envelope<CursorPaginatedResult<ReportDto>>).data.items.map(
+      (report) => report.title,
+    );
+    expect(titles).toEqual(['Acme August']);
+
+    await asAcme(`/api/reports/${reportIds.acme}`).expect(200);
+    for (const id of [reportIds.globex, reportIds.agencyWide, reportIds.mixed]) {
+      const response = await asAcme(`/api/reports/${id}`).expect(404);
+      expect((response.body as { error: { code: string } }).error.code).toBe('REPORT_NOT_FOUND');
+      await asAcme(`/api/reports/${id}/download?format=json`).expect(404);
+    }
+
+    // The agency still sees every report.
+    const agencyList = await agency.agent
+      .get('/api/reports?pageSize=100')
+      .set('X-Organization-Id', agency.organizationId)
+      .expect(200);
+    expect(
+      (agencyList.body as Envelope<CursorPaginatedResult<ReportDto>>).data.items.length,
+    ).toBeGreaterThanOrEqual(4);
   });
 });
 

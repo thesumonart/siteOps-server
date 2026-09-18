@@ -298,6 +298,21 @@ export class WebsiteRepository {
    * behind is not merely stale data, it is a document the worker will keep
    * claiming and failing to resolve a website for, forever.
    */
+  /**
+   * The websites a membership may see, for scoping a read that is not itself
+   * about websites — incidents, check totals, monitors, reports.
+   *
+   * Null means "every website in the organization": an internal role, which
+   * needs no narrowing and must not pay for a lookup. An empty array is a client
+   * with no websites, which sees nothing — never everything.
+   */
+  async idsVisibleTo(
+    organizationId: Types.ObjectId,
+    clientScope: Types.ObjectId | null,
+  ): Promise<readonly Types.ObjectId[] | null> {
+    return clientScope ? this.idsForClient(organizationId, clientScope) : null;
+  }
+
   /** Every website id belonging to one client, for scoping a bulk read. */
   async idsForClient(
     organizationId: Types.ObjectId,

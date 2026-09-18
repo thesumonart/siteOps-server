@@ -1,3 +1,5 @@
+import type { Types } from 'mongoose';
+
 import type { CursorPaginatedResult, IncidentDto, ListIncidentsQuery } from '../contracts/index.js';
 import { categoryForIncidentType } from '../contracts/index.js';
 import { ApiError } from '../errors/ApiError.js';
@@ -25,6 +27,7 @@ export class IncidentService {
   ): Promise<CursorPaginatedResult<IncidentDto>> {
     const rows = await this.repository.list({
       organizationId: organization.objectId,
+      visibleWebsiteIds: await this.visibleWebsiteIds(organization),
       pageSize: query.pageSize,
       status: query.status,
       category: query.category,
@@ -60,7 +63,11 @@ export class IncidentService {
   }
 
   async findById(organization: OrganizationContext, incidentId: string): Promise<IncidentDto> {
-    const incident = await this.repository.findById(organization.objectId, incidentId);
+    const incident = await this.repository.findById(
+      organization.objectId,
+      incidentId,
+      await this.visibleWebsiteIds(organization),
+    );
     if (!incident) {
       throw ApiError.notFound('INCIDENT_NOT_FOUND', 'Incident not found.');
     }
@@ -87,7 +94,11 @@ export class IncidentService {
     incidentId: string,
     actor: Actor,
   ): Promise<IncidentDto> {
-    const incident = await this.repository.findById(organization.objectId, incidentId);
+    const incident = await this.repository.findById(
+      organization.objectId,
+      incidentId,
+      await this.visibleWebsiteIds(organization),
+    );
     if (!incident) {
       throw ApiError.notFound('INCIDENT_NOT_FOUND', 'Incident not found.');
     }
@@ -121,6 +132,18 @@ export class IncidentService {
     await this.analyses?.afterManualResolution(organization, resolved);
 
     return toIncidentDto(resolved, labels.get(resolved.websiteId.toHexString()));
+  }
+
+  /**
+   * The websites this caller may see incidents for: all of them for an
+   * internal role, the client's own for a client membership. Without this a
+   * portal contact read every outage in the agency, and every website id and
+   * URL along with it.
+   */
+  private async visibleWebsiteIds(
+    organization: OrganizationContext,
+  ): Promise<readonly Types.ObjectId[] | null> {
+    return this.websites.idsVisibleTo(organization.objectId, organization.clientScope);
   }
 
   /**

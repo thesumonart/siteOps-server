@@ -125,9 +125,13 @@ export class CheckResultRepository {
   async totalsByWebsite(
     organizationId: Types.ObjectId,
     since: Date,
+    visibleWebsiteIds: readonly Types.ObjectId[] | null = null,
   ): Promise<ReadonlyMap<string, CheckTotals>> {
+    const match: Record<string, unknown> = { organizationId, checkedAt: { $gte: since } };
+    if (visibleWebsiteIds) match.websiteId = { $in: visibleWebsiteIds };
+
     const rows = await WebsiteCheckModel.aggregate<AggregatedTotals & { _id: Types.ObjectId }>([
-      { $match: { organizationId, checkedAt: { $gte: since } } },
+      { $match: match },
       { $group: { _id: '$websiteId', ...COUNT_ACCUMULATORS } },
     ]).exec();
 

@@ -226,6 +226,12 @@ deployed together.
 
 ### Fixed
 
+- **Client portal contacts could read the whole agency's monitoring data.** Websites were narrowed
+  to the contact's client, but incidents, website stats, uptime and checks, the dashboard overview,
+  the monitor summary and results, and reports all read the entire organization. A contact could
+  list every incident, take another client's website id from it, and read that website's history.
+  Every one of these reads now narrows to the contact's own websites; another client's resource is
+  a `404`. A report is visible to a contact only when every website it covers is theirs.
 - **Nobody could stay signed in on the deployed product.** Sign-in answered `200` with a valid
   session and the browser threw the cookie away, so every request after it was anonymous and the
   dashboard sent the person straight back to the sign-in page.
