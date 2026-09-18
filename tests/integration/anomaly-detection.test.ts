@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { CHANNEL_EVENTS, type Plan } from '../../src/contracts/index.js';
 import { EmailService } from '../../src/email/email.service.js';
@@ -65,6 +65,16 @@ const BASELINE = Array.from({ length: 50 }, (_unused, index) => (index % 2 === 0
 let organizationId: Types.ObjectId;
 let server: MockServer | null = null;
 let slow = false;
+
+/*
+ * Every tick claims whatever websites are due, from the whole collection. A
+ * website another file left behind would be claimed in place of this file's
+ * own, and the first case would see a check that never ran. Starting from an
+ * empty queue makes the file independent of what ran before it.
+ */
+beforeAll(async () => {
+  if (available) await clearTestDatabase();
+});
 
 afterEach(async () => {
   await server?.close();
